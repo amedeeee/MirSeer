@@ -1,6 +1,5 @@
 <div align="center">
-
-# 🔮 MirSeer
+<img width="120" height="120" alt="Generated Image October 06, 2026 - 9_21PM (1)" src="https://github.com/user-attachments/assets/83a21e1f-a7ed-444d-afe1-e6ac8c9799ef" />
 
 ### Catalogo Multimediale di Nuova Generazione per MirCrew Releases
 
