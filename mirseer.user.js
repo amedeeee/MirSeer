@@ -647,7 +647,7 @@ function readCache(id) {
     const raw = lsGet(CACHE_PREFIX + id);
     if (!raw) return null;
     let p;
-    try { p = JSON.parse(raw); } catch (e) return null;
+    try { p = JSON.parse(raw); } catch (e) { return null; }
     if (!p.magnets) p.magnets = p.magnet ? [{ uri: p.magnet, dn: '', label: 'Magnet 1', season: null, ep: null }] : [];
     if (p.poster && p.posterSrc === 'forum' && isRepeatedImage(p.poster)) {
         const alt = (p.posterAlts || []).find(u => !isRepeatedImage(u));
