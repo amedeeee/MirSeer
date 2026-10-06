@@ -32,10 +32,6 @@
   <img src="assets/preview-modal.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
 </div>
 
-https://github.com/user-attachments/assets/a39894eb-c101-4e39-980a-f60a54a121d3
-
-
-
 ---
 
 ## ✨ Funzionalità Principali
@@ -95,11 +91,6 @@ MirSeer funziona nativamente senza chiavi esterne. Tuttavia, per abilitare i fon
 ---
 
 ## ❓ Domande Frequenti (FAQ) & Risoluzione Problemi
-
-<details>
-<summary><b>Non vedo i link Magnet o i bottoni di download in alcuni topic. Perché?</b></summary>
-MirCrew Releases richiede di ringraziare nel topic (pulsante "Grazie" / pollice in su di phpBB) per sbloccare i contenuti protetti da tag <code>[hide]</code>. Se non hai ringraziato, lo script non può recuperare il magnet. Apri il topic, clicca "Grazie", torna nel catalogo e aggiorna la cache della scheda.
-</details>
 
 <details>
 <summary><b>Lo script rallenta o non estrae le copertine.</b></summary>
