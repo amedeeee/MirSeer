@@ -27,9 +27,10 @@
 
 ## 🖼️ Anteprima Interfaccia
 
-> *Trascina o carica gli screenshot del tuo script nella cartella `/assets/` per vederli qui.*
 <div align="center">
-  <img src="assets/screenshot-ui.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+  <img src="assets/preview-home.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+  <img src="assets/preview-modal.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+  <video src="assets/demo.mp4" controls width="92%" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.6);"></video>
 </div>
 
 ---
