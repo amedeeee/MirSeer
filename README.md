@@ -17,7 +17,7 @@
 
 ### ⚡ INSTALLAZIONE RAPIDA IN 1 CLIC
 
-[![Installa con Tampermonkey](https://img.shields.io/badge/⚡_INSTALLA_MIRSEER-CLICK_QUI-success?style=for-the-badge&logo=tampermonkey&logoColor=white)](https://raw.githubusercontent.com/lorenzomattei/MirSeer/main/mirseer.user.js)
+[![Installa con Tampermonkey](https://img.shields.io/badge/⚡_INSTALLA_MIRSEER-CLICK_QUI-success?style=for-the-badge&logo=tampermonkey&logoColor=white)](https://raw.githubusercontent.com/amedeeee/MirSeer/main/mirseer.user.js)
 
 *(Richiede un userscript manager attivo: Tampermonkey, Violentmonkey)*
 
@@ -69,7 +69,7 @@ Scegli e installa l'estensione browser supportata in base al tuo sistema:
 | **Android (Kiwi / Firefox)** | Tampermonkey | Installabile dallo store del rispettivo browser |
 
 ### Passo 2: Installa lo Script
-1. Clicca sul pulsante verde: **[INSTALLA MIRSEER ORA](https://raw.githubusercontent.com/lorenzomattei/MirSeer/main/mirseer.user.js)**
+1. Clicca sul pulsante verde: **[INSTALLA MIRSEER ORA](https://raw.githubusercontent.com/amedeeee/MirSeer/main/mirseer.user.js)**
 2. L'estensione aprirà automaticamente la schermata di verifica.
 3. Clicca sul tasto **Installa** (o **Conferma installazione**).
 
@@ -112,17 +112,6 @@ Sì! È sufficiente usare un browser mobile con supporto alle estensioni Chrome/
 <summary><b>Come aggiorno lo script?</b></summary>
 Lo script si aggiorna in automatico in background ogni 24 ore. Per forzare l'aggiornamento immediato, apri la dashboard di Tampermonkey, individua "MirSeer" e seleziona <i>Operazioni > Verifica aggiornamenti</i>.
 </details>
-
----
-
-## 📝 Changelog
-
-### Versione 20.0
-- **New:** Architettura unificata per il caricamento asincrono parallelo dei subforum.
-- **New:** Selettore multi-magnet con supporto per copia batch su qBittorrent.
-- **Improvement:** Riconoscimento avanzato dei banner per releaser con bypass dei pattern grafici di gruppo.
-- **Improvement:** Gestione del layout responsive ottimizzata per schermi ultrawide e display mobile.
-- **Fix:** Risolto bug sul parsing dei titoli contententi parentesi quadre e risoluzioni multiple.
 
 ---
 
