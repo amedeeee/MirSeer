@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         MirSeer - Catalogo Film & Serie TV
+// @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
 // @version      1.0
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
