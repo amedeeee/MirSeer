@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.0
+// @version      1.1
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -394,6 +394,109 @@ GM_addStyle(`
 }
 `);
 
+GM_addStyle(`
+.seer-theme-btn {
+    background: rgba(255,255,255,0.06); border: 1px solid var(--seer-border); color: #fff;
+    width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 16px; flex-shrink: 0; transition: 0.2s;
+}
+.seer-theme-btn:hover { background: rgba(99,102,241,0.25); border-color: var(--seer-accent); }
+
+.seer-modal-forum {
+    position: absolute; top: 16px; right: 58px; z-index: 30; height: 34px; padding: 0 12px;
+    display: flex; align-items: center; gap: 6px; border-radius: 17px;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); border: 1px solid var(--seer-border);
+    color: #fff !important; font-size: 12px; font-weight: 700; text-decoration: none !important; transition: all 0.2s;
+}
+.seer-modal-forum:hover { background: var(--seer-accent); transform: scale(1.05); }
+.seer-modal-title { padding-right: 150px; }
+
+#mirseer-app.seer-light {
+    color-scheme: light;
+    --seer-bg: #f4f6fb; --seer-card: #ffffff; --seer-card-hover: #f1f5ff;
+    --seer-accent-glow: rgba(99,102,241,0.25);
+    --seer-text: #0f172a; --seer-text-muted: #64748b;
+    --seer-border: rgba(15,23,42,0.10); --seer-border-hover: rgba(99,102,241,0.5);
+    background: radial-gradient(circle at 50% 0%, #e6ebfa 0%, var(--seer-bg) 80%);
+}
+@media (max-width: 980px) {
+    #mirseer-app.seer-light .seer-sidebar { background: #fff; box-shadow: 10px 0 40px rgba(15,23,42,0.15); }
+}
+`);
+
+// Light-theme overrides: every selector below is automatically prefixed with #mirseer-app.seer-light
+const LIGHT_RULES = `
+.seer-nav{background:rgba(255,255,255,.88);}
+.seer-menu-btn,.seer-exit-btn,.seer-theme-btn{background:rgba(15,23,42,.05);color:#0f172a;}
+.seer-exit-btn:hover{background:rgba(239,68,68,.12);color:#dc2626;}
+.seer-theme-btn:hover{background:rgba(99,102,241,.15);}
+.seer-search,.seer-search-filter,.seer-sort-select{background:rgba(15,23,42,.04);color:#0f172a;}
+.seer-search:focus,.seer-search-filter:hover,.seer-sort-select:hover,.seer-search-filter:focus,.seer-sort-select:focus{background:#fff;}
+.seer-search-filter option,.seer-sort-select option{background:#fff;color:#0f172a;}
+.seer-search-filter option:disabled{color:#94a3b8;}
+.seer-side-item{color:#334155;}
+.seer-side-item:hover{background:rgba(15,23,42,.06);color:#0f172a;}
+.seer-side-item.active{background:var(--seer-accent);color:#fff;}
+.seer-side-item.disabled:hover{background:transparent;color:#334155;}
+.seer-count-badge,.seer-group-title em{background:rgba(15,23,42,.05);}
+.seer-group-title{color:#1e293b;}
+.seer-row{box-shadow:0 1px 3px rgba(15,23,42,.06);}
+.seer-row:hover{box-shadow:0 6px 22px rgba(15,23,42,.12);}
+.seer-poster-wrap{background:#e2e8f0;border-color:rgba(15,23,42,.08);}
+.seer-poster-fallback{background:linear-gradient(180deg,#e2e8f0,#cbd5e1);}
+.seer-title{color:#0f172a;}
+.seer-row:hover .seer-title{color:#4f46e5;}
+.seer-type-label{color:#334155;background:rgba(15,23,42,.06);}
+.seer-views-label{color:#4f46e5;}
+.seer-pill.audio{color:#047857;background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);}
+.seer-pill.subs{color:#b45309;background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.4);}
+.seer-pill.codec{color:#475569;background:rgba(15,23,42,.05);border-color:rgba(15,23,42,.1);}
+.tag-season{color:#4338ca;}
+.tag-text{color:#334155;}
+.tag-audio{color:#047857;}
+.tag-file{color:#0369a1;}
+.seer-load-btn{background:#fff;border-color:rgba(15,23,42,.15);color:#0f172a;}
+.seer-load-btn:hover{background:var(--seer-accent);border-color:var(--seer-accent);color:#fff;}
+
+#seer-hero{background:#e8edfb;box-shadow:0 20px 50px rgba(15,23,42,.18);}
+.seer-hero-bg.blur{filter:blur(26px) brightness(1.08) saturate(1.1);}
+.seer-hero-shade{background:linear-gradient(90deg,rgba(244,246,251,.96) 0%,rgba(244,246,251,.78) 45%,rgba(244,246,251,.10) 100%),linear-gradient(0deg,rgba(244,246,251,.9) 0%,transparent 42%);}
+.seer-hero-title{color:#0f172a;text-shadow:none;}
+.seer-hero-kicker{color:#92400e;background:rgba(245,158,11,.18);border-color:rgba(217,119,6,.4);}
+.seer-hero-label{color:#4f46e5;}
+.seer-hero-desc{color:#334155;text-shadow:none;}
+.seer-hero-btn{background:rgba(15,23,42,.06);border-color:rgba(15,23,42,.15);color:#0f172a;}
+.seer-hero-btn:hover{background:rgba(15,23,42,.12);}
+.seer-hero-btn.primary,.seer-hero-btn.primary:hover{background:linear-gradient(135deg,#6366f1,#a855f7);border-color:transparent;color:#fff;}
+.seer-hero-poster{box-shadow:0 24px 60px rgba(15,23,42,.35);border-color:rgba(15,23,42,.15);}
+.seer-hero-arrow{background:rgba(255,255,255,.75);color:#0f172a;border-color:rgba(15,23,42,.12);}
+.seer-hero-arrow:hover{background:var(--seer-accent);color:#fff;}
+.seer-hero-dot{background:rgba(15,23,42,.25);}
+.seer-hero-dot.active{background:#0f172a;}
+
+.seer-chip{background:rgba(15,23,42,.05);border-color:rgba(15,23,42,.1);color:#1e293b;}
+.seer-chip.chip-audio{color:#047857;}
+.seer-chip.chip-subs{color:#b45309;}
+.seer-chip.chip-season{color:#4338ca;}
+.seer-chip.chip-file{color:#0369a1;}
+
+#seer-modal-overlay{background:rgba(15,23,42,.45);}
+.seer-detail-window{background:#fff;border-color:rgba(15,23,42,.12);box-shadow:0 30px 80px rgba(15,23,42,.35),0 0 40px rgba(99,102,241,.12);}
+.seer-modal-left{background:#e2e8f0;}
+.seer-detail-window.is-landscape .seer-modal-left::after{background:linear-gradient(180deg,rgba(255,255,255,0) 55%,#fff 100%);}
+.seer-modal-close,.seer-modal-forum{background:rgba(255,255,255,.85);color:#0f172a !important;border-color:rgba(15,23,42,.15);}
+.seer-modal-close:hover{background:#ef4444;color:#fff !important;}
+.seer-modal-forum:hover{background:var(--seer-accent);color:#fff !important;}
+.seer-modal-title{color:#0f172a;}
+.seer-specs-matrix,.seer-text-box,.seer-magnet-item{background:rgba(15,23,42,.04);}
+.seer-spec-value,.seer-magnet-label{color:#0f172a;}
+.seer-synopsis-body,.seer-text-box{color:#334155;}
+.seer-raw-box{background:rgba(15,23,42,.04);border-color:rgba(15,23,42,.12);color:#64748b;}
+.seer-magnet-copy{color:#4338ca;}
+.seer-magnet-copy:hover,.seer-magnet-copy.copied{color:#fff;}
+`;
+GM_addStyle(LIGHT_RULES.replace(/(^|\})\s*([^{}]+)\{/g, (m, a, sel) =>
+    a + sel.split(',').map(s => '#mirseer-app.seer-light ' + s.trim()).join(',') + '{'));
+
 const CACHE_PREFIX = 'mirseer_v20_';
 const FREQ_KEY = CACHE_PREFIX + 'imgfreq';
 const FILM_FORUM_ID = 26;
@@ -455,6 +558,15 @@ function lsSet(k, v) {
     try { localStorage.setItem(k, v); return true; } catch (e) {}
     evictStorage();
     try { localStorage.setItem(k, v); return true; } catch (e) { return false; }
+}
+
+function loadTheme() {
+    try { if (typeof GM_getValue === 'function') return GM_getValue('theme', 'dark'); } catch (e) {}
+    return lsGet('seer_theme') || 'dark';
+}
+function saveTheme(t) {
+    try { if (typeof GM_setValue === 'function') { GM_setValue('theme', t); return; } } catch (e) {}
+    lsSet('seer_theme', t);
 }
 
 setTimeout(() => {
@@ -535,7 +647,7 @@ function readCache(id) {
     const raw = lsGet(CACHE_PREFIX + id);
     if (!raw) return null;
     let p;
-    try { p = JSON.parse(raw); } catch (e) { return null; }
+    try { p = JSON.parse(raw); } catch (e) return null;
     if (!p.magnets) p.magnets = p.magnet ? [{ uri: p.magnet, dn: '', label: 'Magnet 1', season: null, ep: null }] : [];
     if (p.poster && p.posterSrc === 'forum' && isRepeatedImage(p.poster)) {
         const alt = (p.posterAlts || []).find(u => !isRepeatedImage(u));
@@ -1652,6 +1764,7 @@ function paintModal(item) {
     win.classList.toggle('text-mode', kind === 'text');
 
     $('seer-modal-title').innerText = item.displayTitle;
+    $('seer-modal-forum').href = item.url;
 
     let chipsHtml = '';
     if (item.year) chipsHtml += `<span class="seer-chip">${esc(item.year)}</span>`;
@@ -2336,6 +2449,7 @@ function init() {
                     <input type="text" class="seer-search" id="seer-search-input" placeholder="Cerca…" />
                     <button class="seer-search-btn" id="seer-search-submit" title="Cerca">🔍</button>
                 </div>
+                <button class="seer-theme-btn" id="seer-theme-btn" title="Cambia tema">☀️</button>
                 <button class="seer-exit-btn" id="seer-exit">Esci</button>
             </div>
         </div>
@@ -2373,6 +2487,7 @@ function init() {
         <div id="seer-modal-overlay">
             <div class="seer-detail-window">
                 <button class="seer-modal-close" id="seer-modal-close-btn">&times;</button>
+                <a class="seer-modal-forum" id="seer-modal-forum" href="#" target="_blank" rel="noopener" title="Apri il post sul forum">🔗 Forum</a>
                 <div class="seer-modal-left" id="seer-modal-left-art"></div>
                 <div class="seer-modal-right">
                     <h2 class="seer-modal-title" id="seer-modal-title"></h2>
@@ -2399,6 +2514,20 @@ function init() {
         </div>
     `;
     document.body.appendChild(app);
+
+    const themeBtn = $('seer-theme-btn');
+    let theme = loadTheme();
+    const applyTheme = t => {
+        app.classList.toggle('seer-light', t === 'light');
+        themeBtn.textContent = t === 'light' ? '🌙' : '☀️';
+        themeBtn.title = t === 'light' ? 'Passa al tema scuro' : 'Passa al tema chiaro';
+    };
+    applyTheme(theme);
+    themeBtn.onclick = () => {
+        theme = theme === 'light' ? 'dark' : 'light';
+        applyTheme(theme);
+        saveTheme(theme);
+    };
 
     buildSearchFilter();
     posterObserver = new IntersectionObserver(onRowsVisible, { root: app, rootMargin: '600px 0px' });
