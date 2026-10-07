@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.2.1
+// @version      1.2
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -50,7 +50,7 @@ const SECTIONS = [
     { name: 'Edicola',        fid: 43,                ico: '📰' },
     { name: 'Musica Audio',   fid: 46,                ico: '🎵' },
     { name: 'Musica Video',   fid: 47,                ico: '🎤' },
-    { name: 'Games PC',       fid: 67,                ico: '🎮' }
+    { name: 'Games PC',       fid: 66,                ico: '🎮' }
 ];
 const FILE_TYPES = new Set(['EBooks', 'Comics', 'Edicola', 'Games PC']);
 const AUDIO_TYPES = new Set(['ABooks', 'Musica Audio']);
