@@ -34,23 +34,16 @@
 ---
 
 ## ✨ Funzionalità Principali
-
-- 🎬 **Interfaccia Cinema a Schermo Intero:** Modalità Dark immersiva con componenti moderni basati su *Glassmorphism*, transizioni GPU-accelerated e zero interferenze col layout originale del forum.
-- 🗂️ **17 Sezioni Indicizzate Automaticamente:** Supporto a tutte le sezioni Cine, Serie TV, Documentari e Animazione, con auto-discovery dinamica di thread e subforum.
-- 🖼️ **Rilevamento Intelligente delle Locandine:** Algoritmo *Aspect-Ratio Agnostic* capace di identificare e centrare cover verticali (2:3), orizzontali (16:9), quadrate (1:1) o banner personalizzati.
-- 🛡️ **Anti-Banner del Releaser:** Esclusione euristica intelligente dei loghi del team, gif animate decorative, userbar e firme in testa ai post.
-- 🧲 **Gestione Magnet Episodio per Episodio:**
-  - Parsing granulare per stagioni ed episodi singoli.
-  - Copia in 1-clic con feedback visivo.
-  - Tasto **"Copia Tutti i Magnet"** ottimizzato per l'incollo di massa su qBittorrent, Transmission e Deluge.
-- 🧹 **Ripulitura Sinossi Naturale:** Eliminazione di separatori ASCII artistici (es. `-=-=-=-`, `★`, `■`), metadati ridondanti e crediti tecnici per mostrare una trama pulita e leggibile.
-- 🔍 **Ricerca Universale & Contestuale:** Ricerca istantanea nella sezione corrente o ricerca globale su tutto il forum con risultati raggruppati per categoria.
-- 📊 **Filtri e Ordinamento Dinamico:** Ordina al volo le release per:
-  - Più Visti (con estrazione del counter visualizzazioni reale `👁️` del forum).
-  - Ultimi Usciti (data del topic).
-  - Titolo Alfabetico (A-Z).
-  - Numero di Risposte/Interazioni.
-- 🎠 **Hero Carousel Interattivo:** Banner in evidenza nella parte superiore con rotazione automatica e pausa intelligente al passaggio del mouse (`hover`).
+- 🎬 Interfaccia Cinema (Lista & Griglia)
+Trasforma il forum in un vero e proprio catalogo in stile Netflix/Plex. Layout immersivo in modalità Dark (Glassmorphism), Hero Carousel per i titoli in tendenza e libertà di scegliere tra la visualizzazione a lista classica o la nuova Vista a Griglia per le sole locandine.
+- 🍿 Metadati Avanzati, Voti & Trailer (Integrazione TMDb/IMDb)
+Algoritmo intelligente che bypassa banner, userbar e firme dei releaser per estrarre i dati reali. Arricchisce i post con locandine in HD, trame ripulite, valutazioni medie, generi e ti permette di riprodurre i Trailer YouTube in un player a comparsa senza mai uscire dalla pagina.
+- ⬇️ Automazione Torrent & WebUI Integrata
+Gestione granulare dei Magnet link (episodio per episodio o intere stagioni). Oltre alla "Copia Rapida", ora puoi inviare i download direttamente a qBittorrent o Transmission con un clic, smistandoli automaticamente nelle tue cartelle di destinazione (es. /Media/Film o /Media/SerieTV).
+- ⭐ Libreria Personale (Preferiti & Scaricati)
+Tieni traccia delle tue preferenze senza limiti. Salva le release nella tua lista Preferiti per un accesso rapido e usa il marcatore visivo "Scaricato" (✓) per ricordarti cosa hai già inviato al tuo client torrent. Database locale ultra-veloce basato su IndexedDB.
+- 🔍 Ricerca Universale & Filtri Rapidi
+Motore di ricerca istantaneo (globale o per singola sezione) attivabile con scorciatoie da tastiera. Trova esattamente ciò che vuoi grazie ai Filtri Rapidi (facets) per isolare con un clic contenuti 4K UHD, HDR/Dolby Vision, Audio ITA o Stagioni Complete.
 
 ---
 
