@@ -3,7 +3,7 @@
 
 ### Catalogo Multimediale di Nuova Generazione per MirCrew Releases
 
-[![Version](https://img.shields.io/badge/version-1.3-blueviolet.svg?style=for-the-badge)](https://github.com/amedeeee/MirSeer/releases)
+[![Version](https://img.shields.io/badge/version-1.4-blueviolet.svg?style=for-the-badge)](https://github.com/amedeeee/MirSeer/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Tampermonkey Compatible](https://img.shields.io/badge/Tampermonkey-Compatibile-00485B.svg?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Platform: phpBB](https://img.shields.io/badge/Platform-phpBB-B22222.svg?style=for-the-badge&logo=phpbb)](https://mircrew-releases.org)
