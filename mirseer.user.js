@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.3
+// @version      1.4
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -460,31 +460,6 @@ GM_addStyle(`
 }
 `);
 
-GM_addStyle(`
-.seer-hero-arrow {
-    width: 46px; height: 46px; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.04));
-    border: 1px solid rgba(255,255,255,0.22);
-    backdrop-filter: blur(12px) saturate(1.4); -webkit-backdrop-filter: blur(12px) saturate(1.4);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.25);
-    opacity: 0; transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-#seer-hero:hover .seer-hero-arrow { opacity: 1; }
-.seer-hero-arrow svg { width: 20px; height: 20px; stroke: #fff; fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
-.seer-hero-arrow:hover {
-    background: linear-gradient(135deg, #6366f1, #a855f7);
-    border-color: transparent;
-    transform: translateY(-50%) scale(1.12);
-    box-shadow: 0 10px 30px rgba(99,102,241,0.6);
-}
-.seer-hero-arrow.next:hover svg { transform: translateX(2px); }
-.seer-hero-arrow.prev:hover svg { transform: translateX(-2px); }
-.seer-hero-arrow:active { transform: translateY(-50%) scale(0.95); }
-.seer-hero-arrow.prev { left: 18px; }
-.seer-hero-arrow.next { right: 18px; }
-@media (hover: none) { .seer-hero-arrow { opacity: 0.9; } }
-`);
 // Vista griglia, filtri rapidi/avanzati, preferiti, scaricati, trailer, MediaInfo, toast, releaser
 GM_addStyle(`
 .seer-view-toggle { display: inline-flex; border: 1px solid var(--seer-border); border-radius: 9px; overflow: hidden; flex-shrink: 0; }
@@ -880,7 +855,121 @@ GM_addStyle(`
 #mirseer-app.seer-light .seer-magnet-box #seer-send-all-btn { color: #4338ca; }
 #mirseer-app.seer-light .seer-magnet-box #seer-send-all-btn.copied { color: #fff; }
 `);
-const CACHE_PREFIX = 'mirseer_v24_';
+GM_addStyle(`
+:root { --seer-accent-2: #a855f7; }
+#mirseer-fab { background: linear-gradient(135deg, var(--seer-accent), var(--seer-accent-2)) !important; }
+.seer-action-btn, .seer-hero-btn.primary { background: linear-gradient(135deg, var(--seer-accent), var(--seer-accent-2)); }
+#mirseer-app.seer-light .seer-hero-btn.primary, #mirseer-app.seer-light .seer-hero-btn.primary:hover { background: linear-gradient(135deg, var(--seer-accent), var(--seer-accent-2)); }
+.seer-tool-btn.primary { background: linear-gradient(135deg, var(--seer-accent), var(--seer-accent-2)); border-color: transparent; color: #fff !important; }
+.seer-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#mirseer-app.seer-compact .seer-list { gap: 4px; }
+#mirseer-app.seer-compact .seer-row { padding: 4px 10px; gap: 12px; }
+#mirseer-app.seer-compact .seer-poster-wrap { height: 52px; min-width: 38px; }
+#mirseer-app.seer-compact .seer-poster-fallback { width: 38px; height: 52px; font-size: 20px; }
+#mirseer-app.seer-compact .seer-preview { display: none; }
+#mirseer-app.seer-compact .seer-list.seer-grid { grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); gap: 10px; }
+#mirseer-app.seer-compact .seer-row.is-card { padding: 0; }
+#mirseer-app.seer-compact .is-card .seer-poster-wrap { height: auto; }
+
+@keyframes seerShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.seer-skel-box, .seer-skel-line {
+    background: linear-gradient(90deg, rgba(128,128,128,.10) 25%, rgba(128,128,128,.24) 50%, rgba(128,128,128,.10) 75%);
+    background-size: 200% 100%; animation: seerShimmer 1.4s linear infinite; border-radius: 6px;
+}
+.seer-skel-box { width: 100%; height: 100%; min-width: 54px; }
+.is-card .seer-skel-box { position: absolute; inset: 0; border-radius: 0; }
+.seer-skel-line { height: 12px; margin: 3px 0; }
+.seer-skel-line.w80 { width: 80%; } .seer-skel-line.w60 { width: 60%; } .seer-skel-line.w40 { width: 40%; }
+.seer-skel-line.tall { height: 36px; }
+.seer-row.seer-skel { pointer-events: none; }
+.seer-hero-skel { height: 100%; padding: 36px 72px; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+
+.seer-row { scroll-margin-top: 84px; scroll-margin-bottom: 24px; }
+.seer-row.kb-focus { outline: 2px solid var(--seer-accent); outline-offset: 2px; }
+
+.seer-row.sel-mode { padding-left: 50px; }
+.seer-row.is-card.sel-mode { padding-left: 0; }
+.seer-sel-box {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; border-radius: 6px;
+    border: 2px solid var(--seer-text-muted); background: rgba(0,0,0,.35); color: #fff; font-size: 14px; font-weight: 900;
+    display: flex; align-items: center; justify-content: center; z-index: 4;
+}
+.seer-row.is-card .seer-sel-box { top: 10px; left: 10px; transform: none; }
+.seer-sel-box.on { background: var(--seer-accent); border-color: var(--seer-accent); }
+.seer-row.is-selected { border-color: var(--seer-accent); box-shadow: 0 0 0 2px var(--seer-accent-glow); }
+.sel-mode .seer-card-badges { top: 40px; }
+#seer-batch-bar {
+    display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 150;
+    align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 94vw;
+    background: #151f36; border: 1px solid var(--seer-border); border-radius: 16px; padding: 10px 14px;
+    box-shadow: 0 18px 44px rgba(0,0,0,.6);
+}
+#seer-batch-bar.show { display: flex; }
+.seer-batch-count { font-weight: 800; font-size: 13px; color: #fff; }
+.seer-batch-status { font-size: 12px; color: var(--seer-text-muted); font-weight: 700; }
+
+.seer-modal-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.22); background: rgba(0,0,0,.55); backdrop-filter: blur(8px);
+    color: #fff; font-size: 26px; line-height: 1; cursor: pointer; z-index: 5; transition: all .2s;
+    display: flex; align-items: center; justify-content: center; padding: 0 0 3px;
+}
+.seer-modal-nav:hover:not(:disabled) { background: var(--seer-accent); }
+.seer-modal-nav:disabled { opacity: .25; cursor: default; }
+.seer-modal-nav.prev { left: 18px; } .seer-modal-nav.next { right: 18px; }
+@media (max-width: 1100px) { .seer-modal-nav { display: none; } }
+
+.seer-user { position: relative; flex-shrink: 0; }
+.seer-user-btn {
+    width: 38px; height: 38px; border-radius: 50%; overflow: hidden; padding: 0; cursor: pointer; font-size: 18px; color: #fff;
+    border: 2px solid var(--seer-accent); background: linear-gradient(135deg, #312e81, #581c87);
+    display: flex; align-items: center; justify-content: center;
+}
+.seer-user-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.seer-user-menu {
+    display: none; position: absolute; top: calc(100% + 10px); right: 0; min-width: 230px; z-index: 300;
+    background: #151f36; border: 1px solid var(--seer-border); border-radius: 14px; padding: 8px; box-shadow: 0 18px 40px rgba(0,0,0,.6);
+}
+.seer-user-menu.open { display: block; }
+.seer-user-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; margin-bottom: 6px; border-bottom: 1px solid var(--seer-border); }
+.seer-user-head img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+.seer-user-name { font-weight: 800; font-size: 14px; color: #fff; }
+.seer-user-sub { font-size: 11.5px; color: var(--seer-text-muted); }
+.seer-user-menu a {
+    display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; font-size: 13px; font-weight: 700;
+    color: #e2e8f0 !important; text-decoration: none !important;
+}
+.seer-user-menu a:hover { background: var(--seer-accent); color: #fff !important; }
+
+.seer-wl-panel {
+    display: none; margin-bottom: 18px; padding: 14px 18px; gap: 8px; flex-wrap: wrap; align-items: center;
+    background: var(--seer-card); border: 1px solid var(--seer-border); border-radius: 14px;
+}
+.seer-wl-panel.show { display: flex; }
+.seer-wl-chip {
+    display: inline-flex; align-items: center; gap: 4px; background: rgba(255,255,255,.06); border: 1px solid var(--seer-border);
+    border-radius: 20px; padding: 4px 6px 4px 12px; font-size: 12.5px; font-weight: 700;
+}
+.seer-wl-chip button { background: none; border: none; color: var(--seer-text-muted); cursor: pointer; font-size: 14px; padding: 0 6px; }
+.seer-wl-chip button:hover { color: #f87171; }
+.seer-wl-empty { font-size: 12.5px; color: var(--seer-text-muted); }
+.tag-new { background: linear-gradient(135deg, #ef4444, #f97316); color: #fff; }
+
+.seer-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.seer-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.seer-swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--seer-accent); }
+#seer-accent-custom { width: 44px; height: 30px; border: none; background: none; cursor: pointer; padding: 0; }
+
+#mirseer-app.seer-light #seer-batch-bar, #mirseer-app.seer-light .seer-user-menu { background: #fff; box-shadow: 0 18px 40px rgba(15,23,42,.25); }
+#mirseer-app.seer-light .seer-batch-count, #mirseer-app.seer-light .seer-user-name { color: #0f172a; }
+#mirseer-app.seer-light .seer-user-menu a { color: #1e293b !important; }
+#mirseer-app.seer-light .seer-user-menu a:hover { color: #fff !important; }
+#mirseer-app.seer-light .seer-wl-chip { background: rgba(15,23,42,.05); }
+#mirseer-app.seer-light .seer-modal-nav { background: rgba(255,255,255,.85); color: #0f172a; border-color: rgba(15,23,42,.15); }
+`);
+
+const CACHE_PREFIX = 'mirseer_v25_';
 const FREQ_KEY = CACHE_PREFIX + 'imgfreq';
 const FILM_FORUM_ID = 26;
 const SERIES_FORUM_ID = 28;
@@ -919,6 +1008,20 @@ const logoSvg = gid => `<svg class="seer-logo" viewBox="0 0 100 64" xmlns="http:
     <circle cx="50" cy="32" r="12" fill="url(#${gid})" stroke="#8b5cf6" stroke-width="3"/>
     <circle cx="46" cy="27" r="3.2" fill="#e9d5ff"/>
 </svg>`;
+
+const fmtSize = b => {
+    b = Number(b) || 0;
+    if (!b) return '';
+    const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let i = 0;
+    while (b >= 1024 && i < 4) { b /= 1024; i++; }
+    return (b >= 100 ? Math.round(b) : Math.round(b * 10) / 10) + ' ' + u[i];
+};
+const magnetsSize = mags => {
+    let t = 0;
+    for (const m of mags || []) { const x = m.uri.match(/[?&]xl=(\d+)/i); if (!x) return 0; t += +x[1]; }
+    return t;
+};
 
 const fmtViews = n => {
     n = Number(n) || 0;
@@ -1164,6 +1267,22 @@ function pureCore() {
         return null;
     }
 
+    // ---- Dimensione ----
+    const SIZE_UNITS = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1048576, gib: 1073741824, tib: 1099511627776 };
+    const sizeToBytes = (num, unit) => {
+        const n = parseFloat(String(num).replace(/\s/g, '').replace(',', '.'));
+        const u = SIZE_UNITS[String(unit).toLowerCase()];
+        return n > 0 && u ? Math.round(n * u) : 0;
+    };
+    function extractSize(text) {
+        const t = text || '';
+        let m, field = 0, mi = 0;
+        if ((m = t.match(/\b(?:DIMENSION[EI]|PESO|SIZE|GRANDEZZA)(?:\s+TOTALE)?\s*:\s*(\d[\d.,]*)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/i))) field = sizeToBytes(m[1], m[2]);
+        const re = /File\s*size\s*:\s*(\d[\d\s.,]*?)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/gi;
+        while ((m = re.exec(t))) mi += sizeToBytes(m[1], m[2]);
+        return { field, mi };
+    }
+
     // Tutto il parsing testuale di un post in un colpo solo (un solo messaggio al worker)
     function processPost(text) {
         const t = text || '';
@@ -1171,7 +1290,8 @@ function pureCore() {
             fields: parsePostFields(t),
             synopsis: extractSynopsis(t),
             body: stripDividers(t).slice(0, 4000) || null,
-            miText: extractMediaInfoText(t)
+            miText: extractMediaInfoText(t),
+            sizeField: extractSize(t).field, sizeMi: extractSize(t).mi
         };
     }
 
@@ -1252,6 +1372,16 @@ let advOpen = false;
 const newGx = () => ({ key: '', name: '', items: [], nextUrl: null, exhausted: true, loading: false, mode: 'author' });
 let gx = newGx();                 // risultati "globali" del filtro releaser
 let autoBusy = false;
+let selMode = false;
+const selected = new Set();
+let lastSelId = null;
+let lastDisplayed = [];
+let kbIdx = -1, kbId = null;
+let batchBusy = false;
+const scrollMemory = new Map();
+let wlNew = new Map(), wlChecking = false, wlLastCheck = 0;
+let currentUser = null;
+let follows = (() => { const f = getPref('follows', {}); return { rel: (f && f.rel) || {}, title: (f && f.title) || {} }; })();
 
 const iconFor = name => { const s = sectionList.find(x => x.name === name); return s ? s.ico : '📁'; };
 const typeIcon = item => iconFor(item.type);
@@ -1392,11 +1522,14 @@ const getTmdbKey = () => String(getPref('tmdb_api_key', '') || '').trim();
 const setTmdbKey = k => setPref('tmdb_api_key', String(k || '').trim());
 
 const HERO_SPEEDS = [5000, 10000, 0];
-const SORT_MODES = ['recent', 'activity', 'views', 'title', 'replies'];
+const SORT_MODES = ['recent', 'activity', 'views', 'title', 'replies', 'size'];
 const settings = {
     heroEnabled: !!getPref('heroEnabled', true),
     heroSpeed: (v => (HERO_SPEEDS.includes(v) ? v : 5000))(Number(getPref('heroSpeed', 5000))),
     startView: String(getPref('startView', 'home')),
+    density: getPref('density', 'comfortable') === 'compact' ? 'compact' : 'comfortable',
+    accent: String(getPref('accent', '#6366f1')),
+    accent2: String(getPref('accent2', '#a855f7')),
     magnetAction: getPref('magnetAction', 'copy') === 'open' ? 'open' : 'copy'
 };
 sortMode = (v => (SORT_MODES.includes(v) ? v : 'recent'))(getPref('sortMode', 'recent'));
@@ -1404,7 +1537,7 @@ sortMode = (v => (SORT_MODES.includes(v) ? v : 'recent'))(getPref('sortMode', 'r
 // ---- Vista (lista / griglia), filtri rapidi, "scaricati" e preferiti ----
 let viewMode = getPref('viewMode', 'list') === 'grid' ? 'grid' : 'list';
 let hideSeen = !!getPref('hideSeen', false);
-const newFilters = () => ({ q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all' });
+const newFilters = () => ({ q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all', sizeMin: null, sizeMax: null, genre: 'all' });
 const filters = newFilters();
 
 let seenSet = new Set((() => { const a = getPref('seen', []); return Array.isArray(a) ? a : []; })().map(String));
@@ -1579,6 +1712,7 @@ const snapshot = it => ({
     tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null,
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
+    sizeBytes: it.sizeBytes || 0,
     author: it.author || '', authorId: it.authorId || null, authorAvatar: it.authorAvatar || null,
     body: it.kind === 'text' ? (it.body || '').slice(0, 4000) : null
 });
@@ -1844,7 +1978,7 @@ function buildItem({ topicId, href, raw, type, views, replies, ts, lastReplyTs, 
         poster: null, posterSrc: null, posterAlts: [], backdrop: null,
         posterTried: false, synopsis: null, magnet: null, magnets: [], thanksUrl: null, extId: null,
         origTitle: null, fieldYear: null, genre: null, country: null,
-        tmdbId: null, tmdbKind: null, vote: null, genres: [], trailer: null, imdbId: null, mediaInfo: null,
+        tmdbId: null, tmdbKind: null, vote: null, genres: [], trailer: null, imdbId: null, mediaInfo: null, sizeBytes: 0,
         _vers: null
     };
 }
@@ -1964,13 +2098,13 @@ function favItems() {
 
 function updateFavCount() {
     const el = $('seer-fav-count');
-    if (el) el.textContent = Object.keys(favs).length || '';
+    if (el) el.textContent = wlNew.size ? '🆕 ' + wlNew.size : (Object.keys(favs).length || '');
 }
 
 function toggleFav(item) {
     const id = String(item.id);
-    if (favs[id]) { delete favs[id]; toast('Rimosso dai preferiti'); }
-    else { favs[id] = favSnapshot(item); toast('⭐ Aggiunto ai preferiti', 'ok'); }
+    if (favs[id]) { delete favs[id]; toast('Rimosso dalla watchlist'); }
+    else { favs[id] = favSnapshot(item); toast('⭐ Aggiunto alla watchlist', 'ok'); }
     setPref('favs', favs);
     updateFavCount();
     if (view.key === 'favs' && !search.active) renderDeck(localFilterValue());
@@ -1984,6 +2118,376 @@ function markSeen(item, on = true) {
     persistSeen();
     refreshItem(item);
 }
+// =====================================================================
+//  v1.4: Watchlist, utente, selezione multipla, navigazione, hash, aspetto
+// =====================================================================
+
+// ---- Watchlist: segui releaser / titolo ----
+const relKey = n => String(n || '').trim().toLowerCase();
+const titleFollowKey = it => normT(it.cleanTitle) + '|' + it.type;
+const isFollowingRel = n => !!n && !!follows.rel[relKey(n)];
+const isFollowingTitle = it => !!follows.title[titleFollowKey(it)];
+const saveFollows = () => setPref('follows', follows);
+const knownMaxId = pred => { const ids = [...registry.values()].filter(pred).map(i => i.numericId).filter(Boolean); return ids.length ? Math.max(...ids) : null; };
+
+function toggleFollowRel(name, id, avatar) {
+    if (!name) return;
+    const k = relKey(name);
+    if (follows.rel[k]) { delete follows.rel[k]; toast('Releaser rimosso dalla watchlist'); }
+    else {
+        follows.rel[k] = { name, id: id || null, avatar: avatar || null, lastId: knownMaxId(i => relKey(i.author) === k), added: Date.now() };
+        toast('👁️ Segui ' + name, 'ok');
+    }
+    saveFollows(); afterFollowChange(true);
+}
+function toggleFollowTitle(item) {
+    const k = titleFollowKey(item);
+    if (follows.title[k]) { delete follows.title[k]; toast('Titolo rimosso dalla watchlist'); }
+    else {
+        follows.title[k] = { key: k, title: item.cleanTitle, type: item.type, lastId: knownMaxId(i => titleFollowKey(i) === k), added: Date.now() };
+        toast('👁️ Seguo «' + item.cleanTitle + '»', 'ok');
+    }
+    saveFollows(); afterFollowChange(true);
+}
+function afterFollowChange(check) {
+    updateFavCount(); renderWlPanel(); renderRelPanel();
+    if (currentModalItem && $('seer-modal-overlay').style.display === 'flex') paintModal(currentModalItem);
+    if (check) checkFollows(true);
+}
+function collectNew(f, items, found) {
+    const ids = items.map(i => i.numericId).filter(Boolean);
+    if (!ids.length) return;
+    const top = Math.max(...ids);
+    f.top = Math.max(f.top || 0, top);
+    if (f.lastId == null) { f.lastId = top; return; }
+    items.forEach(i => { if (i.numericId > f.lastId) found.set(i.id, i); });
+}
+async function checkFollows(force = false) {
+    if (wlChecking || (!force && Date.now() - wlLastCheck < 600000)) return;
+    const rels = Object.values(follows.rel).slice(0, 15), titles = Object.values(follows.title).slice(0, 15);
+    if (!rels.length && !titles.length) return;
+    wlChecking = true; wlLastCheck = Date.now();
+    renderWlPanel();
+    const found = new Map();
+    try {
+        for (const f of rels) {
+            const page = await fetchSearchPage(relSearchUrl(f), { relaxed: true, fallbackType: null });
+            if (page.flood) break;
+            collectNew(f, page.items.filter(it => !it.author || relKey(it.author) === relKey(f.name)), found);
+        }
+        for (const f of titles) {
+            const sec = sectionList.find(s => s.name === f.type);
+            const fids = sec && sec.fid ? [String(sec.fid)] : [FILM_FORUM_ID, SERIES_FORUM_ID];
+            const page = await fetchSearchPage(buildSearchUrl(f.title, fids), { relaxed: !(f.type === 'Film' || f.type === 'Serie TV'), fallbackType: f.type });
+            if (page.flood) break;
+            collectNew(f, page.items.filter(it => titleFollowKey(it) === f.key), found);
+        }
+        wlNew = found;
+        saveFollows();
+    } catch (e) { console.warn('checkFollows', e); }
+    finally {
+        wlChecking = false;
+        updateFavCount(); renderWlPanel();
+        if (view.key === 'favs' && !search.active) renderDeck(localFilterValue(), true);
+    }
+}
+function markAllFollowsSeen() {
+    [...Object.values(follows.rel), ...Object.values(follows.title)].forEach(f => { if (f.top) f.lastId = Math.max(f.lastId || 0, f.top); });
+    wlNew = new Map(); saveFollows(); updateFavCount(); renderWlPanel();
+    if (view.key === 'favs') renderDeck(localFilterValue());
+}
+function renderWlPanel() {
+    const p = $('seer-wl-panel');
+    if (!p) return;
+    const on = view.key === 'favs' && !search.active;
+    p.classList.toggle('show', on);
+    if (!on) { p.innerHTML = ''; return; }
+    const rels = Object.values(follows.rel), titles = Object.values(follows.title);
+    if (!rels.length && !titles.length) { p.innerHTML = '<span class="seer-wl-empty">Segui un releaser o un titolo dalla scheda dettagli (➕ Segui) per vedere qui le nuove uscite.</span>'; return; }
+    p.innerHTML =
+        rels.map(f => `<span class="seer-wl-chip">👤 ${esc(f.name)}<button data-wl-del="rel" data-k="${esc(relKey(f.name))}" title="Smetti di seguire">✕</button></span>`).join('') +
+        titles.map(f => `<span class="seer-wl-chip">📺 ${esc(f.title)}<button data-wl-del="title" data-k="${esc(f.key)}" title="Smetti di seguire">✕</button></span>`).join('') +
+        `<span style="flex:1"></span><button class="seer-facet" data-wl="check">🔄 ${wlChecking ? 'Controllo…' : 'Controlla ora'}</button>` +
+        (wlNew.size ? `<button class="seer-facet active" data-wl="seen">✓ Segna tutto come visto (${wlNew.size})</button>` : '');
+}
+
+// ---- Utente loggato (avatar in alto a destra) ----
+function detectUser(doc) {
+    const out = doc.querySelector('a[href*="mode=logout"]');
+    if (!out) return null;
+    const box = doc.querySelector('#username_logged_in, .header-profile');
+    const img = box && box.querySelector('img.avatar, .avatar img');
+    const nameEl = box && box.querySelector('.username, .username-coloured');
+    const m = ((out.getAttribute('title') || out.textContent || '')).match(/\[\s*(.+?)\s*\]/);
+    const name = (nameEl && nameEl.textContent.trim()) || (m && m[1]) || 'Account';
+    const prof = [...doc.querySelectorAll('a[href*="mode=viewprofile"]')].find(a => /[?&]u=\d+/.test(a.getAttribute('href')) && ((box && box.contains(a)) || a.textContent.trim() === name));
+    const src = img && img.getAttribute('src');
+    return {
+        name,
+        uid: prof ? (prof.getAttribute('href').match(/[?&]u=(\d+)/) || [])[1] : null,
+        avatar: src && !src.startsWith('data:') ? absUrl(src) : null
+    };
+}
+function paintUser() {
+    const btn = $('seer-user-btn'), menu = $('seer-user-menu');
+    if (!btn) return;
+    const u = currentUser;
+    if (u && u.avatar) {
+        btn.innerHTML = `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">`;
+        btn.querySelector('img').addEventListener('error', () => { btn.textContent = '🙂'; });
+    } else btn.textContent = u ? '🙂' : '👤';
+    btn.title = u ? u.name : 'Accedi al forum';
+    menu.innerHTML = u
+        ? `<div class="seer-user-head">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">` : '<span style="font-size:30px">🙂</span>'}<div><div class="seer-user-name">${esc(u.name)}</div><div class="seer-user-sub">MirCrew</div></div></div>` +
+          `<a href="/ucp.php" target="_blank" rel="noopener">⚙️ Impostazioni utente</a>` +
+          (u.uid ? `<a href="/memberlist.php?mode=viewprofile&amp;u=${esc(u.uid)}" target="_blank" rel="noopener">👤 Il mio profilo</a>` : '')
+        : `<a href="/ucp.php?mode=login" target="_blank" rel="noopener">🔑 Accedi al forum</a>`;
+}
+
+// ---- Invio multiplo ----
+async function sendRaw(item, uris) {
+    const client = tcClient(), base = tcBase(), dir = tcPathFor(item);
+    if (client === 'qbittorrent') await qbAdd(base, tcUser(), tcPass(), uris, dir);
+    else for (const u of uris) await trRpc(base, tcUser(), tcPass(), { method: 'torrent-add', arguments: dir ? { filename: u, 'download-dir': dir } : { filename: u } });
+    return dir;
+}
+function paintSelection() {
+    document.querySelectorAll('.seer-row').forEach(r => {
+        const on = selected.has(String(r.dataset.topicId));
+        r.classList.toggle('is-selected', on);
+        const bx = r.querySelector('.seer-sel-box');
+        if (bx) { bx.classList.toggle('on', on); bx.textContent = on ? '✓' : ''; }
+    });
+    updateBatchBar();
+}
+function setSelMode(on) {
+    selMode = !!on;
+    if (!selMode) selected.clear();
+    lastSelId = null;
+    $('seer-sel-btn').classList.toggle('active', selMode);
+    renderDeck(localFilterValue(), true);
+    updateBatchBar();
+}
+function toggleSel(item, shift = false) {
+    const id = String(item.id);
+    if (shift && lastSelId && lastSelId !== id) {
+        const ids = lastDisplayed.map(x => String(x.id));
+        const a = ids.indexOf(lastSelId), b = ids.indexOf(id);
+        if (a >= 0 && b >= 0) ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => selected.add(x));
+    } else if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+    lastSelId = id;
+    paintSelection();
+}
+function updateBatchBar() {
+    const bar = $('seer-batch-bar');
+    if (!bar) return;
+    bar.classList.toggle('show', selMode);
+    const n = selected.size, tc = tcClient() !== 'off';
+    $('seer-batch-count').textContent = n + (n === 1 ? ' selezionato' : ' selezionati');
+    const send = $('seer-batch-send');
+    send.style.display = tc ? '' : 'none';
+    send.textContent = `⬇️ Invia ${n} a ${tcName()}`;
+    ['seer-batch-send', 'seer-batch-copy', 'seer-batch-seen'].forEach(id => { $(id).disabled = !n || batchBusy; });
+}
+async function ensureMagnets(it) {
+    await scrapeTopicData(it);
+    if (!(it.magnets && it.magnets.length)) {
+        const found = await unlockMagnet(it);
+        if (found && found.length) {
+            it.magnets = found; it.magnet = found[0].uri;
+            if (it.kind === 'text') it.kind = 'file';
+            if (!it.sizeBytes) it.sizeBytes = magnetsSize(found);
+            saveCache(it);
+        }
+    }
+    return it.magnets || [];
+}
+async function batchRun(mode) {
+    if (batchBusy || !selected.size) return;
+    const items = [...selected].map(id => registry.get(id)).filter(Boolean);
+    if (mode === 'seen') {
+        items.forEach(it => seenSet.add(String(it.id)));
+        persistSeen(); toast(`✓ ${items.length} segnati come scaricati`, 'ok'); setSelMode(false); return;
+    }
+    if (mode === 'send' && (tcClient() === 'off' || !tcBase())) { toast('Configura prima il client torrent nelle impostazioni ⚙️', 'warn'); return; }
+    batchBusy = true; updateBatchBar();
+    const st = $('seer-batch-status');
+    const all = [];
+    let ok = 0, empty = 0, fail = 0, lastErr = '';
+    for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        st.textContent = `${mode === 'send' ? 'Invio' : 'Lettura'} ${i + 1}/${items.length}…`;
+        try {
+            const mags = await ensureMagnets(it);
+            if (!mags.length) { empty++; continue; }
+            const uris = mags.map(m => m.uri);
+            if (mode === 'send') await sendRaw(it, uris); else all.push(...uris);
+            seenSet.add(String(it.id)); ok++;
+        } catch (e) {
+            fail++; lastErr = (e && e.message) || String(e);
+            if (mode === 'send' && fail >= 3) break;
+        }
+    }
+    batchBusy = false; st.textContent = '';
+    persistSeen();
+    if (mode === 'copy' && all.length) copyToClipboard(all.join('\n'));
+    const parts = [mode === 'send' ? `⬇️ ${ok} inviati a ${tcName()}` : `📋 ${all.length} magnet copiati`];
+    if (empty) parts.push(`${empty} senza magnet`);
+    if (fail) parts.push(`${fail} errori (${lastErr})`);
+    toast(parts.join(' · '), fail ? 'warn' : 'ok', 5000);
+    if (ok) setSelMode(false); else updateBatchBar();
+}
+
+// ---- Modale: precedente / successivo ----
+function modalIndex() {
+    if (!currentModalItem) return -1;
+    let i = lastDisplayed.indexOf(currentModalItem);
+    if (i < 0) i = lastDisplayed.findIndex(x => x._vers && x._vers.includes(currentModalItem));
+    return i;
+}
+function updateModalNav() {
+    const i = modalIndex(), more = $('seer-load-more-btn').style.display !== 'none';
+    $('seer-modal-prev').disabled = i <= 0;
+    $('seer-modal-next').disabled = i < 0 || (i >= lastDisplayed.length - 1 && !more);
+}
+function navModal(dir) {
+    const i = modalIndex();
+    if (i < 0) return;
+    const next = lastDisplayed[i + dir];
+    if (!next) {
+        if (dir > 0 && $('seer-load-more-btn').style.display !== 'none') { toast('Carico altri risultati…'); $('seer-load-more-btn').click(); }
+        return;
+    }
+    kbId = String(next.id); kbApply(true);
+    openDetailModal(next);
+}
+
+// ---- Navigazione da tastiera nella lista ----
+const kbRows = () => [...$('seer-main-list').querySelectorAll('.seer-row')];
+const gridCols = rows => {
+    if (viewMode !== 'grid' || !rows.length) return 1;
+    const top = rows[0].offsetTop;
+    let n = 0;
+    while (n < rows.length && rows[n].offsetTop === top) n++;
+    return Math.max(1, n);
+};
+function kbApply(scroll = true) {
+    const rows = kbRows();
+    kbIdx = kbId ? rows.findIndex(r => r.dataset.topicId === kbId) : -1;
+    rows.forEach((r, i) => r.classList.toggle('kb-focus', i === kbIdx));
+    if (scroll && kbIdx >= 0) rows[kbIdx].scrollIntoView({ block: 'nearest' });
+}
+function kbMove(step) {
+    const rows = kbRows();
+    if (!rows.length) return;
+    const i = kbIdx < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, kbIdx + step));
+    kbId = rows[i].dataset.topicId;
+    kbApply(true);
+}
+const kbItem = () => (kbId ? registry.get(kbId) : null);
+
+// ---- Skeleton ----
+function showSkeleton(n = 8) {
+    const grid = viewMode === 'grid';
+    const list = $('seer-main-list');
+    list.classList.toggle('seer-grid', grid);
+    const one = grid
+        ? '<div class="seer-row is-card seer-skel"><div class="seer-poster-wrap"><div class="seer-skel-box"></div></div><div class="seer-info"><div class="seer-skel-line w80"></div></div><div class="seer-card-meta"><div class="seer-skel-line w40"></div></div></div>'
+        : '<div class="seer-row seer-skel"><div class="seer-poster-wrap"><div class="seer-skel-box"></div></div><div class="seer-info"><div class="seer-skel-line w60"></div><div class="seer-skel-line w40"></div></div></div>';
+    list.innerHTML = one.repeat(grid ? n * 2 : n);
+}
+
+// ---- Deep link: #seer?v=section&id=26&q=matrix ----
+const HASH_PREFIX = '#seer?';
+let lastHash = '';
+const viewKeyOf = (key, section) => key + ':' + (section ? section.id : '');
+
+function syncHash() {
+    const app = $('mirseer-app');
+    if (!app || app.style.display !== 'block') return;
+    const p = new URLSearchParams();
+    if (view.key !== 'home') p.set('v', view.key);
+    if (view.key === 'section' && view.section) { p.set('id', view.section.id); p.set('name', view.section.name); }
+    if (view.key === 'releaser' && rel) { p.set('rel', rel.name); if (rel.id) p.set('rid', rel.id); }
+    if (search.active) { p.set('q', search.query); p.set('scope', $('seer-search-section-filter').value); }
+    if (sortMode !== 'recent') p.set('sort', sortMode);
+    if (viewMode === 'grid') p.set('mode', 'grid');
+    const fl = ['q4k', 'hdr', 'ita', 'complete'].filter(k => filters[k]);
+    if (fl.length) p.set('f', fl.join(','));
+    if (filters.genre !== 'all') p.set('g', filters.genre);
+    if (filters.releaser) p.set('rl', filters.releaser);
+    if (filters.yFrom) p.set('yf', filters.yFrom);
+    if (filters.yTo) p.set('yt', filters.yTo);
+    if (filters.minVote) p.set('mv', filters.minVote);
+    const s = p.toString();
+    lastHash = s ? HASH_PREFIX + s : '';
+    try { history.replaceState(null, '', location.pathname + location.search + lastHash); } catch (e) {}
+}
+async function restoreFromHash() {
+    if (!location.hash.startsWith(HASH_PREFIX)) return false;
+    const p = new URLSearchParams(location.hash.slice(HASH_PREFIX.length));
+    Object.assign(filters, newFilters());
+    const sm = p.get('sort'); if (SORT_MODES.includes(sm)) { sortMode = sm; $('seer-sort-select').value = sm; }
+    if (p.get('mode') === 'grid' || p.get('mode') === 'list') viewMode = p.get('mode');
+    const fl = (p.get('f') || '').split(',');
+    ['q4k', 'hdr', 'ita', 'complete'].forEach(k => { if (fl.includes(k)) filters[k] = true; });
+    if (p.get('g')) filters.genre = p.get('g');
+    if (p.get('rl')) filters.releaser = p.get('rl');
+    filters.yFrom = parseInt(p.get('yf'), 10) || null;
+    filters.yTo = parseInt(p.get('yt'), 10) || null;
+    filters.minVote = parseFloat(p.get('mv')) || 0;
+    advOpen = !!(filters.yFrom || filters.yTo || filters.releaser || filters.minVote);
+
+    const v = p.get('v') || 'home';
+    if (v === 'releaser' && p.get('rel')) await openReleaser(p.get('rel'), p.get('rid'));
+    else if (v === 'section' && p.get('id')) await setView('section', { id: p.get('id'), name: p.get('name') || (sectionList.find(s => String(s.fid) === p.get('id')) || {}).name || 'Sezione' });
+    else await setView(['films', 'series', 'favs'].includes(v) ? v : 'home');
+
+    const q = p.get('q');
+    if (q && q.length >= 3) {
+        const sel = $('seer-search-section-filter'), sc = p.get('scope');
+        if (sc) { sel.value = sc; if (sel.value !== sc) sel.value = 'current'; }
+        $('seer-search-input').value = q;
+        await runSearch(q);
+    }
+    return true;
+}
+
+// ---- Aspetto + generi ----
+const hexRgb = h => { const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); if (!m) return '99,102,241'; const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].join(','); };
+const ACCENTS = [['#6366f1', '#a855f7'], ['#10b981', '#06b6d4'], ['#f43f5e', '#f97316'], ['#f59e0b', '#ef4444'], ['#0ea5e9', '#6366f1'], ['#ec4899', '#8b5cf6']];
+function applyAppearance() {
+    const r = document.documentElement.style;
+    r.setProperty('--seer-accent', settings.accent);
+    r.setProperty('--seer-accent-2', settings.accent2);
+    r.setProperty('--seer-accent-glow', `rgba(${hexRgb(settings.accent)}, 0.4)`);
+    r.setProperty('--seer-border-hover', `rgba(${hexRgb(settings.accent)}, 0.45)`);
+    const app = $('mirseer-app');
+    if (app) app.classList.toggle('seer-compact', settings.density === 'compact');
+}
+const itemGenres = it => (it.genres && it.genres.length) ? it.genres
+    : (it.genre ? it.genre.split(/[,/|]/).map(s => s.trim()).filter(Boolean) : []);
+function renderGenres() {
+    const box = $('seer-genres');
+    if (!box) return;
+    if (!facetsFor().vid) { box.innerHTML = ''; return; }
+    const cnt = new Map();
+    lastBase.forEach(it => itemGenres(it).forEach(g => {
+        const k = normT(g);
+        if (!k) return;
+        const c = cnt.get(k) || { label: g, n: 0 };
+        c.n++; cnt.set(k, c);
+    }));
+    const top = [...cnt.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 14);
+    if (filters.genre !== 'all' && !cnt.has(filters.genre)) top.push([filters.genre, { label: filters.genre, n: 0 }]);
+    box.innerHTML = top.length
+        ? '<span class="seer-adv-note">🎭 Generi:</span>' + top.map(([k, c]) => `<button class="seer-facet ${filters.genre === k ? 'active' : ''}" data-genre="${esc(k)}">${esc(c.label)} <small>${c.n}</small></button>`).join('')
+        : '';
+}
+let genreTimer = null;
+const genresSoon = () => { clearTimeout(genreTimer); genreTimer = setTimeout(renderGenres, 400); };
+
 const inflight = new Map();
 const jobQueue = [];
 let activeJobs = 0;
@@ -2508,6 +3012,7 @@ function applyParsed(item, p) {
     item.trailer = p.trailer || null;
     item.imdbId = p.imdbId || null;
     item.mediaInfo = p.mediaInfo || null;
+    item.sizeBytes = p.sizeBytes || 0;
     if (p.author && !item.author) item.author = p.author;
     item.authorId = p.authorId || item.authorId || null;
     item.authorAvatar = p.authorAvatar || item.authorAvatar || null;
@@ -2596,6 +3101,9 @@ function scrapeTopicData(item, el = null) {
                 vote: tm ? tm.vote || null : null, genres: tm ? tm.genres || [] : [],
                 trailer: tm ? tm.trailer || null : null, imdbId: tm ? tm.imdbId || null : null,
                 mediaInfo: extractMediaInfoDom(postContent) || pp.miText || null,
+                sizeBytes: pp.sizeField
+                    || ((item.meta.season && ['season', 'range', 'complete'].includes(item.meta.season.kind)) ? 0 : pp.sizeMi)
+                    || magnetsSize(magnets) || 0,
                 author, authorId, authorAvatar,
                 body: kind === 'text' ? (pp.body || null) : null
             };
@@ -2629,6 +3137,7 @@ function onRowsVisible(entries, observer) {
 
         scrapeTopicData(item, row).then(data => {
             if (!data || !row.isConnected) return;
+            genresSoon();
             fillRow(row, item);
         });
     });
@@ -2810,7 +3319,7 @@ function goHero(i) {
 function renderHero() {
     const box = $('seer-hero');
     if (!heroSlides.length) {
-        box.innerHTML = heroBuilding ? '<div class="seer-hero-loading">Sto cercando i titoli del momento…</div>' : '';
+        box.innerHTML = heroBuilding ? '<div class="seer-hero-skel"><div class="seer-skel-line w40"></div><div class="seer-skel-line tall w80"></div><div class="seer-skel-line w60"></div><div class="seer-skel-line w80"></div></div>' : '';
         return;
     }
     heroIdx = Math.min(heroIdx, heroSlides.length - 1);
@@ -2851,7 +3360,7 @@ function renderHero() {
 
     const dots = heroSlides.map((_, i) => `<button class="seer-hero-dot ${i === heroIdx ? 'active' : ''}" data-hero="${i}" aria-label="Slide ${i + 1}"></button>`).join('');
     box.innerHTML = slides +
-        (heroSlides.length > 1 ? `<button class="seer-hero-arrow prev" data-hero="prev" aria-label="Precedente"><svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg></button><button class="seer-hero-arrow next" data-hero="next" aria-label="Successivo"><svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg></button>` : '') +
+        (heroSlides.length > 1 ? `<button class="seer-hero-arrow prev" data-hero="prev" aria-label="Precedente">‹</button><button class="seer-hero-arrow next" data-hero="next" aria-label="Successivo">›</button>` : '') +
         `<div class="seer-hero-dots">${dots}</div>`;
 }
 
@@ -3006,8 +3515,9 @@ function paintModalTools(item) {
     const box = $('seer-modal-tools');
     if (!box) return;
     const fav = isFav(item.id), seen = isSeen(item.id);
-    let h = `<button class="seer-tool-btn ${fav ? 'on' : ''}" data-act="fav" title="${fav ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${fav ? '★' : '☆'} Preferiti</button>`;
+    let h = `<button class="seer-tool-btn ${fav ? 'on' : ''}" data-act="fav" title="${fav ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${fav ? '★' : '☆'} Watchlist</button>`;
     h += `<button class="seer-tool-btn ${seen ? 'on' : ''}" data-act="seen" title="${seen ? 'Clic per annullare' : 'Segna come scaricato'}">✓ ${seen ? 'Scaricato' : 'Segna come scaricato'}</button>`;
+    if (sectionKindOf(item.type) === 'video') { const ft = isFollowingTitle(item); h += `<button class="seer-tool-btn ${ft ? 'on' : ''}" data-act="followtitle">${ft ? '✓ Segui titolo' : '➕ Segui titolo'}</button>`; }
     if (item.trailer) h += `<button class="seer-tool-btn trailer" data-act="trailer">▶ Guarda Trailer</button>`;
     const links = externalLinks(item);
     if (links.length) {
@@ -3097,6 +3607,7 @@ function paintModal(item) {
         const showCrew = crew && crew.toLowerCase() !== item.author.toLowerCase();
         mr += `<button class="seer-meta-pill" data-act="releaser" title="Mostra tutte le release di ${esc(item.author)}">👤 Releaser: ${esc(item.author)}${showCrew ? ` <small>[${esc(crew)}]</small>` : ''}</button>`;
     }
+    if (item.author) mr += `<button class="seer-meta-pill" data-act="followrel">${isFollowingRel(item.author) ? '✓ Seguito' : '➕ Segui'}</button>`;
     mr += `<a class="seer-meta-pill" href="${esc(item.url)}" target="_blank" rel="noopener" title="Apri il post sul forum">🔗 Forum</a>`;
     $('seer-modal-metarow').innerHTML = mr;
 
@@ -3104,6 +3615,7 @@ function paintModal(item) {
     let chipsHtml = '';
     if (item.year) chipsHtml += `<span class="seer-chip">${esc(item.year)}</span>`;
     chipsHtml += `<span class="seer-chip">${esc(item.type)}</span>`;
+    if (item.sizeBytes) chipsHtml += `<span class="seer-chip">💾 ${esc(fmtSize(item.sizeBytes))}</span>`;
     chipsHtml += `<span class="seer-chip">👁️ ${esc(fmtViews(item.views || 0))}</span>`;
     if (kind === 'text') {
         chipsHtml += `<span class="seer-chip">📝 Solo testo (nessun file nel post)</span>`;
@@ -3163,6 +3675,7 @@ function paintModal(item) {
 
     paintModalTools(item);
     paintVersions(item);
+    updateModalNav();
 }
 
 function copyToClipboard(t) {
@@ -3315,6 +3828,7 @@ async function openDetailModal(item, keepVersions = false) {
             if (found && found.length) {
                 item.magnets = found;
                 item.magnet = found[0].uri;
+                if (!item.sizeBytes) item.sizeBytes = magnetsSize(found);
                 if (item.kind === 'text') item.kind = 'file';
                 saveCache(item);
             }
@@ -3371,6 +3885,7 @@ function applySort(items) {
     const a = items.slice();
     switch (sortMode) {
         case 'activity': a.sort((x, y) => ((y.lastReplyTs || y.ts || 0) - (x.lastReplyTs || x.ts || 0)) || ((y.numericId || 0) - (x.numericId || 0))); break;
+        case 'size':     a.sort((x, y) => (y.sizeBytes || 0) - (x.sizeBytes || 0)); break;
         case 'views':    a.sort((x, y) => (y.views || 0) - (x.views || 0)); break;
         case 'replies':  a.sort((x, y) => (y.replies || 0) - (x.replies || 0)); break;
         case 'title':    a.sort((x, y) => x.cleanTitle.localeCompare(y.cleanTitle, 'it', { numeric: true, sensitivity: 'base' })); break;
@@ -3478,7 +3993,7 @@ function facetsFor() {
     return { vid, complete: vid && !FILM_ONLY.has(n), type: sc === 'home', fmts: FMT_BY_SECTION[n] || [] };
 }
 
-const advActive = f => !!((f.vid && (filters.minVote > 0 || filters.codec !== 'all')) || filters.yFrom || filters.yTo || filters.releaser);
+const advActive = f => !!((f.vid && (filters.minVote > 0 || filters.codec !== 'all')) || filters.yFrom || filters.yTo || filters.releaser || filters.sizeMin || filters.sizeMax);
 
 function anyFilter() {
     const f = facetsFor();
@@ -3487,6 +4002,7 @@ function anyFilter() {
         || (f.complete && filters.complete)
         || (f.type && filters.type !== 'all')
         || f.fmts.includes(filters.fmt)
+        || (f.vid && filters.genre !== 'all')
         || advActive(f);
 }
 
@@ -3512,6 +4028,7 @@ function makeFilter() {
             if (filters.codec === 'av1' && !m.isAv1) return false;
             if (filters.codec === 'hevc' && !m.isH265) return false;
             if (filters.codec === 'avc' && !m.isH264) return false;
+            if (filters.genre !== 'all' && !itemGenres(it).some(g => normT(g) === filters.genre)) return false;
         }
         if (f.complete && filters.complete && !isCompleteRelease(it)) return false;
         if (f.type) {
@@ -3525,6 +4042,12 @@ function makeFilter() {
             if (filters.yTo && (!y || y > filters.yTo)) return false;
         }
         if (rl && !((it.author || '') + ' ' + releaserCrew(it)).toLowerCase().includes(rl)) return false;
+        if (filters.sizeMin || filters.sizeMax) {
+            const g = (it.sizeBytes || 0) / 1073741824;
+            if (!g) return false;
+            if (filters.sizeMin && g < filters.sizeMin) return false;
+            if (filters.sizeMax && g > filters.sizeMax) return false;
+        }
         if (hideSeen && isSeen(it.id)) return false;
         return true;
     };
@@ -3563,6 +4086,7 @@ function updateAdv() {
     setVal('seer-adv-yto', filters.yTo || '');
     setVal('seer-adv-rel', filters.releaser || '');
     setVal('seer-adv-codec', filters.codec);
+    setVal('seer-adv-smin', filters.sizeMin || ''); setVal('seer-adv-smax', filters.sizeMax || '');
 
     const names = [...new Set(lastBase.map(i => i.author).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 300);
     const sig = names.join('|');
@@ -3576,7 +4100,21 @@ function updateAdv() {
 
 // Per filtrare per voto serve aver letto i post: li carica a piccoli lotti (poi riesegue il render)
 let warmTimer = null;
+const needsPostData = () => (filters.minVote > 0 && !!getTmdbKey()) || !!filters.sizeMin || !!filters.sizeMax || filters.genre !== 'all';
 function warmRatings(items) {
+    if (!needsPostData()) return;
+    const anyKind = !!(filters.sizeMin || filters.sizeMax);
+    const todo = items.filter(it => !it.posterTried && !ratingTried.has(it.id) && (anyKind || sectionKindOf(it.type) === 'video')).slice(0, 24);
+    if (!todo.length) return;
+    todo.forEach(it => ratingTried.add(it.id));
+    Promise.all(todo.map(it => scrapeTopicData(it).catch(() => null))).then(() => {
+        clearTimeout(warmTimer);
+        warmTimer = setTimeout(() => {
+            if (needsPostData() && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue());
+        }, 500);
+    });
+}
+function warmRatingsOld(items) {
     if (!(filters.minVote > 0) || !getTmdbKey()) return;
     const todo = items.filter(it => !it.posterTried && !ratingTried.has(it.id) && sectionKindOf(it.type) === 'video').slice(0, 24);
     if (!todo.length) return;
@@ -3666,7 +4204,7 @@ function renderRelPanel() {
         `<div class="seer-rel-info">` +
             `<h3 class="seer-rel-name">${esc(rel.name)}</h3>` +
             `<span class="seer-rel-total">${esc(totalTxt)}${rel.loading ? ' · caricamento…' : ''}</span>` +
-            `<div class="seer-rel-pills">${pill('all', '🗂️ Tutte')}${pill('film', '🎬 Film')}${pill('series', '📺 Serie TV')}${pill('other', '📚 Altro')}</div>` +
+            `<div class="seer-rel-pills">${pill('all', '🗂️ Tutte')}${pill('film', '🎬 Film')}${pill('series', '📺 Serie TV')}${pill('other', '📚 Altro')}<button class="seer-facet ${isFollowingRel(rel.name) ? 'active' : ''}" data-rel="follow">${isFollowingRel(rel.name) ? '✓ Seguito' : '➕ Segui'}</button></div>` +
         `</div>`;
     const im = p.querySelector('.seer-rel-avatar img');
     if (im) im.addEventListener('error', () => { im.parentElement.textContent = '👤'; });
@@ -3713,7 +4251,7 @@ async function openReleaser(name, id, avatar) {
     $('seer-sidebar').classList.remove('open');
     $('mirseer-app').scrollTop = 0;
     updateChrome();
-    showListMessage(`Caricamento delle release di ${esc(name)}…`);
+    showSkeleton();
 
     if (!mine.avatar && id) fetchAvatar(id).then(src => { if (rel === mine && src) { mine.avatar = src; renderRelPanel(); } });
 
@@ -3781,15 +4319,18 @@ function gxStart() {
 }
 
 // Con filtri attivi e pochi risultati, scarica altre pagine del forum finche' non ce ne sono abbastanza
+const wantMore = () => anyFilter() || ((view.key === 'films' || view.key === 'series') && !search.active);
+const minNeeded = () => anyFilter() ? AUTO_MIN : ((view.key === 'films' || view.key === 'series') ? 40 : 0);
+
 async function autoPage() {
-    if (autoBusy || search.active || !anyFilter() || !GX_VIEWS.includes(view.key)) return;
+    if (autoBusy || search.active || !wantMore() || !GX_VIEWS.includes(view.key)) return;
     if (gxApplies() && gx.loading) return;
     autoBusy = true;
     try {
         for (let i = 0; i < AUTO_PAGES_MAX; i++) {
-            if (search.active || !anyFilter() || !GX_VIEWS.includes(view.key)) break;
+            if (search.active || !wantMore() || !GX_VIEWS.includes(view.key)) break;
             const done = view.key === 'section' ? currentSectionStore().exhausted : main.exhausted;
-            if (done || getVisibleItems().length >= AUTO_MIN) break;
+            if (done || getVisibleItems().length >= minNeeded()) break;
             if (view.key === 'section') await loadSection(view.section, currentSectionStore());
             else await loadMoreMain();
             renderDeck(localFilterValue(), true);
@@ -3801,7 +4342,7 @@ async function autoPage() {
 function getVisibleItems() {
     let base;
     if (search.active) base = search.items;
-    else if (view.key === 'favs') base = favItems();
+    else if (view.key === 'favs') base = uniqById([...wlNew.values(), ...favItems()]);
     else if (view.key === 'releaser') base = rel ? rel.items : [];
     else if (view.key === 'section') base = currentSectionStore().items;
     else {
@@ -3897,7 +4438,7 @@ function updateChrome() {
     else if (view.key === 'releaser' && rel) t.textContent = '👤 ' + rel.name;
     else if (view.key === 'films') t.textContent = '🎬 Film Disponibili';
     else if (view.key === 'series') t.textContent = '📺 Serie TV';
-    else if (view.key === 'favs') t.textContent = '⭐ I miei Preferiti';
+    else if (view.key === 'favs') t.textContent = '⭐ Watchlist';
     else if (view.key === 'section') t.textContent = iconFor(view.section.name) + ' ' + view.section.name;
     else t.textContent = '🆕 Ultime Release';
 
@@ -3913,6 +4454,7 @@ function updateChrome() {
     $('seer-search-input').placeholder = `Cerca in ${resolveSearchScope().label}…  ( / )`;
 
     document.querySelectorAll('#seer-view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === viewMode));
+    renderGenres(); renderWlPanel(); syncHash();
     renderFacets();
     renderRelPanel();
     updateAdv();
@@ -3928,6 +4470,10 @@ function fillRow(row, item) {
     const grid = viewMode === 'grid';
     const seen = isSeen(item.id);
     const fav = isFav(item.id);
+    const isSel = selected.has(String(item.id));
+    row.classList.toggle('sel-mode', selMode);
+    row.classList.toggle('is-selected', selMode && isSel);
+    const selBox = selMode ? `<span class="seer-sel-box ${isSel ? 'on' : ''}">${isSel ? '✓' : ''}</span>` : '';
 
     row.classList.toggle('is-card', grid);
     row.classList.toggle('is-seen', seen);
@@ -3963,6 +4509,8 @@ function fillRow(row, item) {
     } else {
         specsHtml = `<span class="seer-preview">Lettura del post…</span>`;
     }
+    if (item.sizeBytes && kind !== 'text') specsHtml += `<span class="seer-pill codec">💾 ${esc(fmtSize(item.sizeBytes))}</span>`;
+    if (wlNew.has(String(item.id))) badgesHtml += '<span class="seer-tag tag-new">🆕 Nuovo</span>';
     if (item._vers && item._vers.length > 1) badgesHtml += `<span class="seer-tag tag-vers" title="Più versioni disponibili">📚 ${item._vers.length} versioni</span>`;
     if (seen) badgesHtml += `<span class="seer-tag tag-seen">✓ Scaricato</span>`;
 
@@ -3976,15 +4524,15 @@ function fillRow(row, item) {
 
     if (grid) {
         row.innerHTML = `
-            <div class="seer-poster-wrap">${posterHtml}<div class="seer-card-badges">${badgesHtml}</div>${favBtn}</div>
+            <div class="seer-poster-wrap">${posterHtml}<div class="seer-card-badges">${badgesHtml}</div>${favBtn}${selBox}</div>
             <div class="seer-info"><span class="seer-title" title="${esc(item.rawTitle)}">${esc(item.displayTitle)}</span></div>
-            <div class="seer-card-meta"><span>${esc(item.type)}${item.year ? ' · ' + esc(item.year) : ''}</span><span>👁️ ${esc(fmtViews(item.views || 0))}</span></div>
+            <div class="seer-card-meta"><span>${esc(item.type)}${item.year ? ' · ' + esc(item.year) : ''}${item.sizeBytes ? ' · ' + esc(fmtSize(item.sizeBytes)) : ''}</span><span>👁️ ${esc(fmtViews(item.views || 0))}</span></div>
         `;
         return;
     }
 
     row.innerHTML = `
-        <div class="seer-poster-wrap">${posterHtml}</div>
+        ${selBox}<div class="seer-poster-wrap">${posterHtml}</div>
         <div class="seer-info">
             <div class="seer-title-line">
                 <span class="seer-title" title="${esc(item.rawTitle)}">${esc(item.displayTitle)}</span>
@@ -4018,7 +4566,8 @@ function renderDeck(filterQuery = '', noAuto = false) {
         : (view.key === 'releaser' ? `${displayed.length} release mostrate` : `${displayed.length} uscite mostrate`);
 
     if (displayed.length === 0) {
-        if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Non hai ancora preferiti: premi ☆ su una release per aggiungerla qui.');
+        lastDisplayed = [];
+        if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Watchlist vuota: premi ☆ su una release, oppure ➕ Segui da una scheda per seguire un releaser o una serie.');
         else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
         else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita corrisponde ai filtri attivi. Prova ad azzerarli o a caricare altre uscite.');
         else showListMessage('Nessuna uscita da mostrare qui.');
@@ -4035,6 +4584,10 @@ function renderDeck(filterQuery = '', noAuto = false) {
         if (idx++ < IMG_HI_COUNT) row.dataset.hi = '1';
         fillRow(row, item);
         row.onclick = e => {
+            if (!e.target.closest('.seer-fav-btn')) {
+                kbId = String(item.id); kbApply(false);
+                if (selMode) { toggleSel(item, e.shiftKey); return; }
+            }
             if (e.target.closest('.seer-fav-btn')) { e.stopPropagation(); toggleFav(item); return; }
             openDetailModal(item);
         };
@@ -4057,9 +4610,18 @@ function renderDeck(filterQuery = '', noAuto = false) {
             listContainer.appendChild(h);
             arr.forEach(addRow);
         });
+    } else if (view.key === 'favs' && !search.active && wlNew.size) {
+        const isNew = it => wlNew.has(String(it.id));
+        const head = (t, n) => { const h = document.createElement('div'); h.className = 'seer-group-title'; h.innerHTML = `<span>${t}</span><em>${n}</em>`; listContainer.appendChild(h); };
+        const fresh = displayed.filter(isNew), saved = displayed.filter(it => !isNew(it));
+        if (fresh.length) { head('🆕 Nuove uscite dai tuoi seguiti', fresh.length); fresh.forEach(addRow); }
+        if (saved.length) { head('⭐ Salvati', saved.length); saved.forEach(addRow); }
     } else {
         displayed.forEach(addRow);
     }
+    lastDisplayed = [...listContainer.querySelectorAll('.seer-row')].map(r => registry.get(String(r.dataset.topicId))).filter(Boolean);
+    kbApply(false);
+    if ($('seer-modal-overlay').style.display === 'flex') updateModalNav();
     if (!noAuto) setTimeout(autoPage, 0);
     warmRatings(lastBase);
 }
@@ -4070,6 +4632,13 @@ const localFilterValue = () => {
 };
 
 async function setView(key, section = null) {
+    const savedScroll = scrollMemory.get(viewKeyOf(key, section)) || 0;
+    await setViewCore(key, section);
+    if (view.key !== key) return;
+    if (savedScroll) requestAnimationFrame(() => $('mirseer-app').scrollTo({ top: savedScroll, behavior: 'instant' }));
+    if (key === 'favs') checkFollows();
+}
+async function setViewCore(key, section = null) {
     const token = ++viewToken;
     rel = null;
     gx = newGx();
@@ -4081,6 +4650,7 @@ async function setView(key, section = null) {
     }
     $('seer-search-input').value = '';
     view = { key, section };
+    selected.clear();
     $('seer-sidebar').classList.remove('open');
     $('mirseer-app').scrollTop = 0;
 
@@ -4092,13 +4662,13 @@ async function setView(key, section = null) {
         }
         if (!store.loaded) {
             updateChrome();
-            showListMessage(`Caricamento di "${esc(section.name)}"...`);
+            showSkeleton();
             await loadSection(section, store, INITIAL_PAGES);
             if (token !== viewToken) return;
         }
     } else if (key !== 'favs' && !main.loaded) {
         updateChrome();
-        showListMessage('Caricamento uscite in corso...');
+        showSkeleton();
         await loadMain();
         if (token !== viewToken) return;
     }
@@ -4242,6 +4812,7 @@ async function loadSidebar() {
     try {
         const resp = await fetch('/index.php', { credentials: 'same-origin' });
         const doc = new DOMParser().parseFromString(await resp.text(), 'text/html');
+        if (!currentUser) { currentUser = detectUser(doc); paintUser(); }
 
         const idOf = a => ((a.getAttribute('href') || '').match(/[?&]f=(\d+)/) || [])[1];
         const byId = new Map();
@@ -4413,6 +4984,10 @@ function init() {
                     <input type="text" class="seer-search" id="seer-search-input" placeholder="Cerca…" />
                     <button class="seer-search-btn" id="seer-search-submit" title="Cerca">🔍</button>
                 </div>
+                <div class="seer-user" id="seer-user">
+                    <button class="seer-user-btn" id="seer-user-btn" aria-label="Account">👤</button>
+                    <div class="seer-user-menu" id="seer-user-menu"></div>
+                </div>
                 <button class="seer-theme-btn" id="seer-settings-btn" title="Impostazioni">⚙️</button>
                 <button class="seer-theme-btn" id="seer-theme-btn" title="Cambia tema">☀️</button>
                 <button class="seer-exit-btn" id="seer-exit" title="Esci (Esc)">Esci</button>
@@ -4423,7 +4998,7 @@ function init() {
             <aside class="seer-sidebar" id="seer-sidebar">
                 <div class="seer-side-title">Navigazione</div>
                 <button class="seer-side-item active" data-nav="home"><span class="ico">🏠</span><span class="lbl">Home</span></button>
-                <button class="seer-side-item" data-nav="favs"><span class="ico">⭐</span><span class="lbl">I miei Preferiti</span><span class="seer-side-count" id="seer-fav-count"></span></button>
+                <button class="seer-side-item" data-nav="favs"><span class="ico">⭐</span><span class="lbl">Watchlist</span><span class="seer-side-count" id="seer-fav-count"></span></button>
                 <div class="seer-side-title">🧭 Sezioni</div>
                 <div id="seer-side-sections"></div>
             </aside>
@@ -4434,6 +5009,7 @@ function init() {
                     <h2 class="seer-section-title" id="seer-section-title">🆕 Ultime Release</h2>
                     <div class="seer-header-tools">
                         <span id="seer-count" class="seer-count-badge">Caricamento...</span>
+                        <button class="seer-facet" id="seer-sel-btn" title="Selezione multipla">☑ Seleziona</button>
                         <div class="seer-view-toggle" id="seer-view-toggle">
                             <button data-view="list" title="Vista lista">☰</button>
                             <button data-view="grid" title="Vista locandine">▦</button>
@@ -4444,12 +5020,15 @@ function init() {
                             <option value="views">🔥 Più visti</option>
                             <option value="title">🔤 Titolo (A - Z)</option>
                             <option value="replies">📈 Più risposte</option>
+                            <option value="size">💾 Dimensione (maggiore)</option>
                         </select>
                     </div>
                 </div>
                 <div class="seer-rel-panel" id="seer-rel-panel"></div>
+                <div class="seer-wl-panel" id="seer-wl-panel"></div>
                 <div id="seer-search-hint"></div>
                 <div class="seer-facets" id="seer-facets"></div>
+                <div class="seer-facets" id="seer-genres"></div>
                 <div class="seer-adv" id="seer-adv">
                     <div class="seer-adv-item" id="seer-adv-vote-wrap">
                         <span>⭐ Valutazione TMDb</span>
@@ -4466,6 +5045,12 @@ function init() {
                         <span>👤 Releaser / Crew</span>
                         <input type="text" class="seer-adv-input wide" id="seer-adv-rel" list="seer-adv-rel-list" placeholder="Tutti i releaser" autocomplete="off" spellcheck="false" />
                         <datalist id="seer-adv-rel-list"></datalist>
+                    </div>
+                    <div class="seer-adv-item">
+                        <span>💾 Dimensione (GiB)</span>
+                        <input type="number" class="seer-adv-input" id="seer-adv-smin" placeholder="min" min="0" step="0.5" />
+                        <span>–</span>
+                        <input type="number" class="seer-adv-input" id="seer-adv-smax" placeholder="max" min="0" step="0.5" />
                     </div>
                     <div class="seer-adv-item" id="seer-adv-codec-wrap">
                         <span>🎞️ Codec</span>
@@ -4485,7 +5070,20 @@ function init() {
             </main>
         </div>
 
+        <div id="seer-batch-bar">
+            <span class="seer-batch-count" id="seer-batch-count">0 selezionati</span>
+            <span class="seer-batch-status" id="seer-batch-status"></span>
+            <button class="seer-tool-btn" id="seer-batch-all">☑ Tutti</button>
+            <button class="seer-tool-btn" id="seer-batch-none">☐ Nessuno</button>
+            <button class="seer-tool-btn" id="seer-batch-seen">✓ Segna scaricati</button>
+            <button class="seer-tool-btn" id="seer-batch-copy">📋 Copia magnet</button>
+            <button class="seer-tool-btn primary" id="seer-batch-send">⬇️ Invia</button>
+            <button class="seer-tool-btn" id="seer-batch-cancel">✕</button>
+        </div>
+
         <div id="seer-modal-overlay">
+            <button class="seer-modal-nav prev" id="seer-modal-prev" aria-label="Precedente">‹</button>
+            <button class="seer-modal-nav next" id="seer-modal-next" aria-label="Successivo">›</button>
             <div class="seer-detail-window">
                 <button class="seer-modal-close" id="seer-modal-close-btn">&times;</button>
                 <div class="seer-modal-left" id="seer-modal-left-art"></div>
@@ -4582,6 +5180,25 @@ function init() {
                     </section>
 
                     <section class="seer-set-group">
+                        <h3 class="seer-set-group-title">🎨 Aspetto</h3>
+                        <div class="seer-set-row">
+                            <div class="seer-set-text"><span class="seer-set-label">Colore principale</span><span class="seer-set-sub">Pulsanti, evidenziazioni e bagliori.</span></div>
+                            <div class="seer-swatches" id="seer-swatches"></div>
+                        </div>
+                        <div class="seer-set-row">
+                            <span class="seer-set-label">Colore personalizzato</span>
+                            <input type="color" id="seer-accent-custom" value="#6366f1" />
+                        </div>
+                        <div class="seer-set-row">
+                            <div class="seer-set-text"><span class="seer-set-label">Densità lista</span><span class="seer-set-sub">"Compatta" riduce le righe e nasconde le anteprime.</span></div>
+                            <select class="seer-settings-select" id="seer-pref-density">
+                                <option value="comfortable">Comoda</option>
+                                <option value="compact">Compatta</option>
+                            </select>
+                        </div>
+                    </section>
+
+                    <section class="seer-set-group">
                         <h3 class="seer-set-group-title">🧭 Navigazione e avvio</h3>
                         <div class="seer-set-row">
                             <div class="seer-set-text">
@@ -4672,7 +5289,10 @@ function init() {
                         <p class="seer-kbd-help">
                             <kbd>/</kbd> o <kbd>Ctrl</kbd>+<kbd>K</kbd> — cerca<br>
                             <kbd>Esc</kbd> — chiude finestra / trailer / impostazioni, altrimenti esce da MirSeer<br>
-                            <kbd>←</kbd> <kbd>→</kbd> — cambia slide del carosello
+                            <kbd>←</kbd> <kbd>→</kbd> — cambia slide del carosello<br>
+                            <kbd>j</kbd>/<kbd>k</kbd> — elemento successivo / precedente (griglia: <kbd>h</kbd>/<kbd>l</kbd> di lato)<br>
+                            <kbd>Enter</kbd> apri · <kbd>f</kbd> watchlist · <kbd>d</kbd> scaricato · <kbd>x</kbd> seleziona<br>
+                            Nella scheda: <kbd>←</kbd> <kbd>→</kbd> precedente / successivo (o swipe sul telefono)
                         </p>
                     </section>
 
@@ -4781,7 +5401,7 @@ function init() {
     };
 
     const buildStartOptions = () => {
-        sStart.innerHTML = '<option value="home">🏠 Home (Ultime uscite)</option><option value="favs">⭐ I miei Preferiti</option>' +
+        sStart.innerHTML = '<option value="home">🏠 Home (Ultime uscite)</option><option value="favs">⭐ Watchlist</option>' +
             sectionList.map(sec => {
                 const v = sec.nav || ('sec:' + sec.name);
                 return `<option value="${esc(v)}" ${(sec.nav || sec.fid) ? '' : 'disabled'}>${sec.ico} ${esc(sec.name)}</option>`;
@@ -4798,6 +5418,9 @@ function init() {
     }
 
     function syncSettingsUI() {
+        $('seer-pref-density').value = settings.density;
+        $('seer-accent-custom').value = /^#[0-9a-f]{6}$/i.test(settings.accent) ? settings.accent : '#6366f1';
+        markSw();
         sHero.checked = settings.heroEnabled;
         buildPathInputs();
         sHeroSpeed.value = String(settings.heroSpeed);
@@ -4870,14 +5493,14 @@ function init() {
     };
 
     // --- Backup: esporta / importa configurazione (JSON) ---
-    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser'];
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'follows', 'accent', 'accent2', 'density'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
     $('seer-export-btn').onclick = () => {
         try {
             const data = {};
             BACKUP_KEYS.forEach(k => { const v = getPref(k, undefined); if (v !== undefined) data[k] = v; });
-            const payload = { app: 'MirSeer', schema: 1, version: '1.3', exportedAt: new Date().toISOString(), data };
+            const payload = { app: 'MirSeer', schema: 1, version: '1.4', exportedAt: new Date().toISOString(), data };
             const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -4942,6 +5565,13 @@ function init() {
         if (isStr(d.tcUser)) { setPref('tcUser', d.tcUser); n++; }
         trSid = null;
 
+        if (isObj(d.follows)) { ['rel', 'title'].forEach(t => { if (isObj(d.follows[t])) Object.assign(follows[t], d.follows[t]); }); saveFollows(); n++; }
+        if (/^#[0-9a-f]{6}$/i.test(d.accent || '')) {
+            settings.accent = d.accent; setPref('accent', d.accent);
+            if (isStr(d.accent2) && /^[#a-z0-9(),% -]{4,80}$/i.test(d.accent2)) { settings.accent2 = d.accent2; setPref('accent2', d.accent2); }
+            applyAppearance(); n++;
+        }
+        if (d.density === 'compact' || d.density === 'comfortable') { settings.density = d.density; setPref('density', d.density); applyAppearance(); n++; }
         if (!n) throw new Error('Nessun dato riconosciuto nel file');
         updateFavCount();
         syncSettingsUI();
@@ -5016,12 +5646,15 @@ function init() {
         if (!startApplied) {
             startApplied = true;
             try { await cacheReady; } catch (e) {}
-            const t = startTarget();
-            await setView(t.key, t.section);
-        } else updateHeroVisibility();
+            if (!(await restoreFromHash())) { const t = startTarget(); await setView(t.key, t.section); }
+        } else if (location.hash.startsWith(HASH_PREFIX) && location.hash !== lastHash) await restoreFromHash();
+        else updateHeroVisibility();
+        checkFollows();
     };
 
     const exitApp = () => {
+        lastHash = '';
+        try { if (location.hash.startsWith(HASH_PREFIX)) history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
         app.style.display = 'none';
         fab.style.display = 'flex';
         stopHero();
@@ -5080,11 +5713,13 @@ function init() {
         if (b.dataset.act === 'fav') toggleFav(it);
         else if (b.dataset.act === 'seen') { markSeen(it, !isSeen(it.id)); toast(isSeen(it.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
         else if (b.dataset.act === 'trailer') openTrailer(it);
+        else if (b.dataset.act === 'followtitle') toggleFollowTitle(it);
         else if (b.dataset.act === 'ext') { const m = $('seer-ext-menu'); if (m) m.classList.toggle('open'); }
     };
 
     // Badge releaser -> vista autore
     $('seer-modal-metarow').onclick = e => {
+        if (currentModalItem && e.target.closest('[data-act="followrel"]')) { toggleFollowRel(currentModalItem.author, currentModalItem.authorId, currentModalItem.authorAvatar); return; }
         const b = e.target.closest('[data-act="releaser"]');
         if (!b || !currentModalItem) return;
         const it = currentModalItem;
@@ -5110,6 +5745,7 @@ function init() {
 
     // --- Pannello releaser ---
     $('seer-rel-panel').onclick = e => {
+        if (e.target.closest('[data-rel="follow"]') && rel) { toggleFollowRel(rel.name, rel.id, rel.avatar); return; }
         const c = e.target.closest('[data-rcat]');
         if (c && rel) { rel.cat = c.dataset.rcat; renderDeck(localFilterValue()); return; }
         if (e.target.closest('[data-rel="back"]')) {
@@ -5317,8 +5953,33 @@ function init() {
                     clearTimeout(searchTimer);
                     exitSearchMode();
                 } else e.target.blur();
-            } else exitApp();
+            } else if (selMode) setSelMode(false);
+            else exitApp();
             return;
+        }
+        const free = !typing && !trailerOpen && !settingsOpen && !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (free && modalOpen) {
+            if (e.key === 'ArrowLeft') { e.preventDefault(); navModal(-1); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); navModal(1); }
+            else if (e.key === 'f' && currentModalItem) toggleFav(currentModalItem);
+            else if (e.key === 'd' && currentModalItem) { markSeen(currentModalItem, !isSeen(currentModalItem.id)); toast(isSeen(currentModalItem.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
+            return;
+        }
+        if (free && !modalOpen) {
+            const k = e.key;
+            if (k === 'j' || k === 'k') { e.preventDefault(); kbMove((k === 'j' ? 1 : -1) * gridCols(kbRows())); return; }
+            if (viewMode === 'grid' && (k === 'h' || k === 'l')) { kbMove(k === 'l' ? 1 : -1); return; }
+            if (k === 'Enter' || k === 'f' || k === 'd' || k === 'x') {
+                if (k === 'Enter' && /^(BUTTON|A)$/.test(tag)) return;
+                const it = kbItem();
+                if (!it) return;
+                e.preventDefault();
+                if (k === 'Enter') { if (selMode) toggleSel(it); else openDetailModal(it); }
+                else if (k === 'f') toggleFav(it);
+                else if (k === 'd') { markSeen(it, !isSeen(it.id)); toast(isSeen(it.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
+                else { if (!selMode) setSelMode(true); toggleSel(it); }
+                return;
+            }
         }
         if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !typing && !trailerOpen && !settingsOpen && !modalOpen && heroWanted() && heroSlides.length > 1) {
             e.preventDefault();
@@ -5326,6 +5987,78 @@ function init() {
             startHero();
         }
     });
+
+    // ===== v1.4 wiring =====
+    applyAppearance();
+    currentUser = detectUser(document); paintUser();
+
+    $('seer-user-btn').onclick = e => { e.stopPropagation(); $('seer-user-menu').classList.toggle('open'); };
+    document.addEventListener('click', e => { if (!e.target.closest('.seer-user')) $('seer-user-menu').classList.remove('open'); });
+
+    $('seer-wl-panel').onclick = e => {
+        const d = e.target.closest('[data-wl-del]');
+        if (d) {
+            delete follows[d.dataset.wlDel][d.dataset.k];
+            saveFollows();
+            wlNew.forEach((it, id) => { if (!isFollowingRel(it.author) && !isFollowingTitle(it)) wlNew.delete(id); });
+            afterFollowChange(false);
+            renderDeck(localFilterValue());
+            return;
+        }
+        const a = e.target.closest('[data-wl]');
+        if (a) { if (a.dataset.wl === 'check') checkFollows(true); else markAllFollowsSeen(); }
+    };
+
+    $('seer-genres').onclick = e => {
+        const b = e.target.closest('[data-genre]');
+        if (!b) return;
+        filters.genre = filters.genre === b.dataset.genre ? 'all' : b.dataset.genre;
+        renderDeck(localFilterValue());
+    };
+
+    $('seer-adv-smin').oninput = e => { filters.sizeMin = parseFloat(e.target.value) || null; rerenderSoon(); };
+    $('seer-adv-smax').oninput = e => { filters.sizeMax = parseFloat(e.target.value) || null; rerenderSoon(); };
+
+    $('seer-sel-btn').onclick = () => setSelMode(!selMode);
+    $('seer-batch-all').onclick = () => { lastDisplayed.forEach(it => selected.add(String(it.id))); paintSelection(); };
+    $('seer-batch-none').onclick = () => { selected.clear(); paintSelection(); };
+    $('seer-batch-cancel').onclick = () => setSelMode(false);
+    $('seer-batch-send').onclick = () => batchRun('send');
+    $('seer-batch-copy').onclick = () => batchRun('copy');
+    $('seer-batch-seen').onclick = () => batchRun('seen');
+
+    $('seer-modal-prev').onclick = () => navModal(-1);
+    $('seer-modal-next').onclick = () => navModal(1);
+    {
+        const win = overlay.querySelector('.seer-detail-window');
+        let tx = 0, ty = 0;
+        win.addEventListener('touchstart', e => { const t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY; }, { passive: true });
+        win.addEventListener('touchend', e => {
+            const t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+            if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 2 && !e.target.closest('pre, .seer-magnet-list, .seer-text-box')) navModal(dx < 0 ? 1 : -1);
+        }, { passive: true });
+    }
+
+    app.addEventListener('scroll', () => { if (!search.active) scrollMemory.set(viewKeyOf(view.key, view.section), app.scrollTop); }, { passive: true });
+    window.addEventListener('hashchange', () => {
+        if (!location.hash.startsWith(HASH_PREFIX) || location.hash === lastHash) return;
+        if (app.style.display === 'block') restoreFromHash(); else fab.click();
+    });
+
+    const sSw = $('seer-swatches');
+    sSw.innerHTML = ACCENTS.map(([a, b]) => `<button class="seer-swatch" data-a="${a}" data-b="${b}" style="background:linear-gradient(135deg,${a},${b})" title="${a}"></button>`).join('');
+    function markSw() { sSw.querySelectorAll('.seer-swatch').forEach(s => s.classList.toggle('on', s.dataset.a === settings.accent)); }
+    function setAccent(a, b) {
+        settings.accent = a; settings.accent2 = b;
+        setPref('accent', a); setPref('accent2', b);
+        applyAppearance(); markSw();
+    }
+    sSw.onclick = e => { const b = e.target.closest('.seer-swatch'); if (b) { setAccent(b.dataset.a, b.dataset.b); $('seer-accent-custom').value = b.dataset.a; } };
+    $('seer-accent-custom').oninput = e => setAccent(e.target.value, `color-mix(in srgb, ${e.target.value} 65%, #a855f7)`);
+    $('seer-pref-density').onchange = e => { settings.density = e.target.value === 'compact' ? 'compact' : 'comfortable'; setPref('density', settings.density); applyAppearance(); };
+    markSw();
+
+    if (location.hash.startsWith(HASH_PREFIX)) fab.click();
 
     renderFacets();
     updateAdv();
