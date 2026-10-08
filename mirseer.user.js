@@ -95,7 +95,7 @@ GM_addStyle(`
     background: radial-gradient(circle at 50% 0%, #151c33 0%, var(--seer-bg) 80%);
     color: var(--seer-text); z-index: 2147483646; overflow-x: hidden; overflow-y: auto; box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
-    scroll-behavior: smooth;
+    scroll-behavior: auto;
 }
 #mirseer-app * { box-sizing: border-box; }
 
@@ -256,7 +256,7 @@ GM_addStyle(`
 .seer-row {
     background: var(--seer-card); border-radius: var(--seer-radius); border: 1px solid var(--seer-border);
     display: flex; align-items: center; padding: 8px 14px; gap: 16px; cursor: pointer;
-    transition: all 0.2s ease; position: relative;
+    transition: background 0.2s, border-color 0.2s, transform 0.2s, box-shadow 0.2s; position: relative;
 }
 .seer-row:hover { background: var(--seer-card-hover); border-color: var(--seer-border-hover); transform: translateX(4px); box-shadow: 0 6px 22px rgba(0,0,0,0.45); }
 .seer-poster-wrap {
@@ -437,6 +437,27 @@ GM_addStyle(`
 @media (prefers-reduced-motion: reduce) {
     .seer-hero-slide { transition: none; }
 }
+`);
+
+GM_addStyle(`
+.seer-rl-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.seer-rl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin: 10px 0 6px; }
+.seer-rl-card {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; transition: all .2s;
+    background: var(--seer-card); border: 1px solid var(--seer-border); border-radius: 12px;
+}
+.seer-rl-card:hover { background: var(--seer-card-hover); border-color: var(--seer-border-hover); transform: translateY(-2px); }
+.seer-rl-av {
+    width: 48px; height: 48px; border-radius: 50%; overflow: hidden; flex-shrink: 0; font-size: 22px;
+    display: flex; align-items: center; justify-content: center; border: 2px solid var(--seer-accent);
+    background: linear-gradient(135deg, #312e81, #581c87);
+}
+.seer-rl-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.seer-rl-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.seer-rl-name { font-weight: 800; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seer-rl-count { font-size: 11.5px; color: var(--seer-text-muted); font-weight: 700; }
+.seer-rl-delta { color: #34d399; font-weight: 800; }
+.seer-rl-card .seer-facet { padding: 4px 10px; font-size: 11.5px; flex-shrink: 0; }
 `);
 
 GM_addStyle(`
@@ -982,8 +1003,11 @@ const MAIN_SUB_EXCLUDE_RE = /\b(richiest|regolament|music|audio|concert|ebook|so
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-const absHref = a => { try { return new URL(a.getAttribute('href'), location.href).href; } catch (e) { return a.href || ''; } };
-const absUrl = u => { try { return new URL(u, location.href).href; } catch (e) { return u || ''; } };
+// Relative links must always resolve against the forum root, never against the page we are on (e.g. /releasers/)
+const SITE_ROOT = location.origin + '/';
+const fixUrl = u => String(u || '').replace(/^(https?:\/\/[^\/]+)\/releasers\/(?=(?:viewtopic|viewforum|search|memberlist|ucp|download)\b)/i, '$1/');
+const absHref = a => { try { return fixUrl(new URL(a.getAttribute('href'), SITE_ROOT).href); } catch (e) { return fixUrl(a.href || ''); } };
+const absUrl = u => { try { return fixUrl(new URL(u, SITE_ROOT).href); } catch (e) { return u || ''; } };
 const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1417,13 +1441,14 @@ const cacheReady = (async () => {
             idbDb.onversionchange = () => { try { idbDb.close(); } catch (e) {} idbDb = null; };
             await new Promise(res => {
                 try {
-                    const cur = idbDb.transaction(CACHE_STORE, 'readonly').objectStore(CACHE_STORE).openCursor();
-                    cur.onsuccess = () => {
-                        const c = cur.result;
-                        if (c) { if (!cacheMem.has(c.key) && !dQueue.has(c.key)) cacheMem.set(c.key, c.value); c.continue(); }
-                        else res();
+                    const st = idbDb.transaction(CACHE_STORE, 'readonly').objectStore(CACHE_STORE);
+                    const kq = st.getAllKeys(), vq = st.getAll();
+                    vq.onsuccess = () => {
+                        const ks = kq.result || [], vs = vq.result || [];
+                        for (let i = 0; i < ks.length; i++) if (!cacheMem.has(ks[i]) && !dQueue.has(ks[i])) cacheMem.set(ks[i], vs[i]);
+                        res();
                     };
-                    cur.onerror = () => res();
+                    vq.onerror = () => res();
                 } catch (e) { res(); }
             });
         }
@@ -1766,6 +1791,13 @@ function warmImage(url) {
     i.src = url;
 }
 
+// Cache-first paint: cached rows are complete on the very first frame
+function hydrateSync(item) {
+    if (item.posterTried) return;
+    const c = readCache(item.id);
+    if (c) { applyParsed(item, c); warmImage(item.poster); }
+}
+
 function parseEpisodeRef(text) {
     if (!text) return null;
     const n = v => parseInt(v, 10);
@@ -2062,6 +2094,7 @@ async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackTyp
                 else type = generic ? ((defaultType === 'Serie TV' || meta.isTvSeries) ? 'Serie TV' : 'Film') : defaultType;
                 item = buildItem({ ...rec, type, meta });
                 registry.set(rec.topicId, item);
+                hydrateSync(item);
             }
             if (auto && rec.forumId) { item.forumId = rec.forumId; item.forumName = rec.forumName; }
             rec.item = item;
@@ -2088,9 +2121,10 @@ function favItems() {
     return Object.values(favs).map(f => {
         let it = registry.get(String(f.id));
         if (!it) {
-            it = buildItem({ topicId: f.id, href: f.url, raw: f.rawTitle, type: f.type || 'Film', views: f.views, replies: f.replies, ts: f.ts, lastReplyTs: f.lastReplyTs, author: f.author, authorId: f.authorId });
+            it = buildItem({ topicId: f.id, href: fixUrl(f.url), raw: f.rawTitle, type: f.type || 'Film', views: f.views, replies: f.replies, ts: f.ts, lastReplyTs: f.lastReplyTs, author: f.author, authorId: f.authorId });
             if (f.forumId) { it.forumId = f.forumId; it.forumName = f.forumName || ''; }
             registry.set(String(f.id), it);
+            hydrateSync(it);
         }
         return it;
     });
@@ -2403,7 +2437,9 @@ const HASH_PREFIX = '#seer?';
 let lastHash = '';
 const viewKeyOf = (key, section) => key + ':' + (section ? section.id : '');
 
-function syncHash() {
+let hashT = null;
+function syncHash() { clearTimeout(hashT); hashT = setTimeout(syncHashNow, 250); }
+function syncHashNow() {
     const app = $('mirseer-app');
     if (!app || app.style.display !== 'block') return;
     const p = new URLSearchParams();
@@ -2442,7 +2478,7 @@ async function restoreFromHash() {
     const v = p.get('v') || 'home';
     if (v === 'releaser' && p.get('rel')) await openReleaser(p.get('rel'), p.get('rid'));
     else if (v === 'section' && p.get('id')) await setView('section', { id: p.get('id'), name: p.get('name') || (sectionList.find(s => String(s.fid) === p.get('id')) || {}).name || 'Sezione' });
-    else await setView(['films', 'series', 'favs'].includes(v) ? v : 'home');
+    else await setView(['films', 'series', 'favs', 'releasers'].includes(v) ? v : 'home');
 
     const q = p.get('q');
     if (q && q.length >= 3) {
@@ -2487,6 +2523,202 @@ function renderGenres() {
 }
 let genreTimer = null;
 const genresSoon = () => { clearTimeout(genreTimer); genreTimer = setTimeout(renderGenres, 400); };
+// ---- Pagina Releasers ----
+const REL_TIERS = [[1500, 'Legend', '👑'], [500, 'Senior', '🥇'], [200, 'Lv. 3', '🥈'], [100, 'Lv. 2', '🥉'], [50, 'Lv. 1', '⭐'], [10, 'Junior', '🔹'], [1, 'New', '🌱']];
+const relTier = n => REL_TIERS.find(t => n >= t[0]) || REL_TIERS[REL_TIERS.length - 1];
+const relPage = { list: [], t: 0, loading: false, err: '', q: '', tier: 'all', timer: null, obs: null };
+const relEntry = name => relPage.list.find(x => x.name === name) || { name, id: null, avatar: null };
+
+async function findReleasersUrl() {
+    const saved = String(getPref('relUrl', '') || '').trim();
+    if (saved) return saved;
+    const pick = doc => {
+        const links = [...doc.querySelectorAll('a[href]')].filter(a => !a.closest('#mirseer-app'));
+        return links.find(a => /^\s*releasers?\s*$/i.test(a.textContent))
+            || links.find(a => /releasers/i.test(a.getAttribute('href') || ''));
+    };
+    let a = pick(document);
+    if (!a) {
+        try {
+            const r = await fetch('/index.php', { credentials: 'same-origin' });
+            a = pick(new DOMParser().parseFromString(await r.text(), 'text/html'));
+        } catch (e) {}
+    }
+    return a ? absHref(a) : '';
+}
+
+function parseReleasersDoc(doc) {
+    const out = [], seen = new Set();
+    doc.querySelectorAll('table tr').forEach(tr => {
+        const td = tr.querySelectorAll('td');
+        if (td.length < 2) return;
+        const count = parseInt(td[td.length - 1].textContent.replace(/\D/g, ''), 10);
+        const name = td[0].textContent.replace(/\s+/g, ' ').trim();
+        if (!name || isNaN(count) || seen.has(name.toLowerCase())) return;
+        seen.add(name.toLowerCase());
+        const a = [...tr.querySelectorAll('a[href]')].find(x => /[?&]u=\d+/.test(x.getAttribute('href')));
+        const id = a ? ((a.getAttribute('href').match(/[?&]u=(\d+)/) || [])[1] || null) : null;
+        const img = [...tr.querySelectorAll('img')].find(i => {
+            const u = i.getAttribute('data-src') || i.getAttribute('src') || '';
+            return /avatar/i.test((i.className || '') + ' ' + u) && !/rank|smil|icon|spacer/i.test(u);
+        });
+        const s = img && (img.getAttribute('data-src') || img.getAttribute('src'));
+        out.push({ name, id, count, avatar: s && !s.startsWith('data:') ? absUrl(s) : null, tier: relTier(count)[1] });
+    });
+    out.sort((a, b) => b.count - a.count);
+    out.forEach((r, i) => { r.rank = i + 1; });
+    return out;
+}
+
+function applyRelBase(list) {
+    let b = getPref('relBase', null);
+    const now = Date.now();
+    if (!b || !b.m || now - b.t > 864e5) {
+        b = { t: now, m: Object.fromEntries(list.map(r => [r.name.toLowerCase(), r.count])) };
+        setPref('relBase', b);
+    }
+    list.forEach(r => { const o = b.m[r.name.toLowerCase()]; r.delta = o == null ? 0 : Math.max(0, r.count - o); });
+}
+
+async function loadReleasersData(force = false) {
+    if (relPage.loading) return;
+    const ck = CACHE_PREFIX + 'releasers';
+    if (!relPage.list.length) {
+        try { const c = JSON.parse(cacheGet(ck) || 'null'); if (c && c.list) { relPage.list = c.list; relPage.t = c.t; } } catch (e) {}
+    }
+    if (!force && relPage.list.length && Date.now() - relPage.t < 600000) { paintRlGroups(); paintRlStatus(); return; }
+    relPage.loading = true; relPage.err = '';
+    paintRlStatus(); paintRlGroups();
+    try {
+        const url = await findReleasersUrl();
+        if (!url) throw new Error('nolink');
+        await netGate();
+        const resp = await fetch(url, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const list = parseReleasersDoc(new DOMParser().parseFromString(await resp.text(), 'text/html'));
+        if (!list.length) throw new Error('empty');
+        applyRelBase(list);
+        relPage.list = list; relPage.t = Date.now();
+        cacheSet(ck, JSON.stringify({ t: relPage.t, list }));
+    } catch (e) { relPage.err = String((e && e.message) || e); }
+    finally {
+        relPage.loading = false;
+        if (view.key === 'releasers' && !search.active) {
+            if ($('seer-rl-groups')) { paintRlGroups(); paintRlStatus(); } else renderReleasersPage();
+        }
+    }
+}
+
+function startRelRefresh() {
+    clearInterval(relPage.timer);
+    relPage.timer = setInterval(() => {
+        if (view.key !== 'releasers') { clearInterval(relPage.timer); return; }
+        if (!document.hidden && $('mirseer-app').style.display === 'block') loadReleasersData(true);
+    }, 600000);
+    loadReleasersData();
+}
+
+function relCardHtml(r) {
+    const f = isFollowingRel(r.name);
+    const av = r.avatar ? `<img src="${esc(r.avatar)}" alt="" referrerpolicy="no-referrer">` : '👤';
+    const d = r.delta > 0 ? ` <span class="seer-rl-delta" title="Nuove release dal controllo giornaliero">▲ +${r.delta}</span>` : '';
+    return `<div class="seer-rl-card" data-name="${esc(r.name)}"${r.id ? ` data-id="${esc(r.id)}"` : ''}>` +
+        `<div class="seer-rl-av">${av}</div>` +
+        `<div class="seer-rl-meta"><span class="seer-rl-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="seer-rl-count">#${r.rank} · ${r.count} release${d}</span></div>` +
+        `<button class="seer-facet ${f ? 'active' : ''}" data-rlf="1">${f ? '✓ Seguito' : '➕ Segui'}</button></div>`;
+}
+
+function paintRlStatus() {
+    const s = $('seer-rl-status');
+    if (!s) return;
+    s.textContent = relPage.loading ? 'Aggiornamento…'
+        : relPage.err ? '⚠️ Aggiornamento non riuscito'
+        : relPage.t ? 'Aggiornato alle ' + new Date(relPage.t).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : '';
+    $('seer-count').innerText = relPage.list.length + ' releaser';
+}
+
+function paintRlFollow() {
+    document.querySelectorAll('.seer-rl-card').forEach(c => {
+        const b = c.querySelector('[data-rlf]'), f = isFollowingRel(c.dataset.name);
+        b.classList.toggle('active', f);
+        b.textContent = f ? '✓ Seguito' : '➕ Segui';
+    });
+}
+
+function paintRlGroups() {
+    const g = $('seer-rl-groups');
+    if (!g) return;
+    const q = relPage.q;
+    const list = relPage.list.filter(r => !q || r.name.toLowerCase().includes(q));
+    if (!list.length) {
+        g.innerHTML = relPage.err
+            ? `<div class="seer-status-msg err">Non riesco a leggere la pagina Releasers del forum.<br><br>Incolla qui l'indirizzo della pagina:<br><input class="seer-adv-input wide" id="seer-rl-url" style="width:min(420px,90%);margin:8px 0" placeholder="https://mircrew-releases.org/..."><br><button class="seer-facet" data-rlsave="1">Salva e riprova</button></div>`
+            : `<p class="seer-status-msg">${relPage.loading ? 'Caricamento dei releaser…' : 'Nessun releaser trovato.'}</p>`;
+        return;
+    }
+    g.innerHTML = REL_TIERS.map(t => {
+        if (relPage.tier !== 'all' && relPage.tier !== t[1]) return '';
+        const arr = list.filter(r => r.tier === t[1]);
+        if (!arr.length) return '';
+        return `<div class="seer-group-title"><span>${t[2]} Releaser ${t[1]} <small style="opacity:.6">(${t[0]}+ release)</small></span><em>${arr.length}</em></div>` +
+            `<div class="seer-rl-grid">${arr.map(relCardHtml).join('')}</div>`;
+    }).join('');
+
+    if (relPage.obs) relPage.obs.disconnect();
+    relPage.obs = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+            if (!en.isIntersecting) return;
+            const c = en.target;
+            relPage.obs.unobserve(c);
+            const r = relEntry(c.dataset.name);
+            if (r.avatar) return;
+            getRelAvatar(r).then(src => {
+                if (!src) return;
+                r.avatar = src;
+                if (c.isConnected) setRlAvatar(c, src);
+            });
+        });
+    }, { root: $('mirseer-app'), rootMargin: '300px 0px' });
+    g.querySelectorAll('.seer-rl-card').forEach(c => relPage.obs.observe(c));
+}
+
+function renderReleasersPage() {
+    const box = $('seer-main-list');
+    box.classList.remove('seer-grid');
+    lastDisplayed = [];
+    const chips = [['all', 'Tutti']].concat(REL_TIERS.map(t => [t[1], t[2] + ' ' + t[1]]))
+        .map(([k, l]) => `<button class="seer-facet ${relPage.tier === k ? 'active' : ''}" data-rltier="${esc(k)}">${esc(l)}</button>`).join('');
+    box.innerHTML =
+        `<div class="seer-rl-head"><input class="seer-adv-input wide" id="seer-rl-q" placeholder="Cerca releaser…" value="${esc(relPage.q)}" autocomplete="off" spellcheck="false">${chips}` +
+        `<span style="flex:1"></span><span class="seer-adv-note" id="seer-rl-status"></span><button class="seer-facet" data-rlrefresh="1">🔄 Aggiorna</button></div>` +
+        `<div id="seer-rl-groups"></div>`;
+    paintRlStatus(); paintRlGroups();
+}
+
+function relPageClick(e) {
+    if (view.key !== 'releasers' || search.active) return;
+    const f = e.target.closest('[data-rlf]');
+    if (f) {
+        const r = relEntry(f.closest('.seer-rl-card').dataset.name);
+        toggleFollowRel(r.name, r.id, r.avatar); paintRlFollow();
+        return;
+    }
+    const t = e.target.closest('[data-rltier]');
+    if (t) {
+        relPage.tier = t.dataset.rltier;
+        document.querySelectorAll('[data-rltier]').forEach(b => b.classList.toggle('active', b === t));
+        paintRlGroups();
+        return;
+    }
+    if (e.target.closest('[data-rlrefresh]')) { loadReleasersData(true); return; }
+    if (e.target.closest('[data-rlsave]')) {
+        const v = ($('seer-rl-url') || {}).value;
+        if (v && v.trim()) { setPref('relUrl', v.trim()); relPage.err = ''; loadReleasersData(true); }
+        return;
+    }
+    const c = e.target.closest('.seer-rl-card');
+    if (c) { const r = relEntry(c.dataset.name); openReleaser(r.name, r.id, r.avatar); }
+}
 
 const inflight = new Map();
 const jobQueue = [];
@@ -2508,24 +2740,15 @@ function jobScore(job) {
 }
 
 function pump() {
+    if (activeJobs >= MAX_CONCURRENT || !jobQueue.length) return;
+    for (let i = jobQueue.length - 1; i >= 0; i--) {
+        const j = jobQueue[i];
+        if (j.el && !j.el.isConnected) { jobQueue.splice(i, 1); inflight.delete(j.key); j.resolve(CANCELLED); }
+    }
+    jobQueue.forEach(j => { j._s = jobScore(j); });
+    jobQueue.sort((a, b) => a._s - b._s);
     while (activeJobs < MAX_CONCURRENT && jobQueue.length) {
-        let bestIdx = -1;
-        let bestScore = Infinity;
-        for (let i = 0; i < jobQueue.length; i++) {
-            const job = jobQueue[i];
-            if (job.el && !job.el.isConnected) {
-                jobQueue.splice(i, 1);
-                inflight.delete(job.key);
-                job.resolve(CANCELLED);
-                i--;
-                continue;
-            }
-            const s = jobScore(job);
-            if (s < bestScore) { bestScore = s; bestIdx = i; }
-        }
-        if (bestIdx === -1) break;
-
-        const [job] = jobQueue.splice(bestIdx, 1);
+        const job = jobQueue.shift();
         activeJobs++;
         job.task().then(job.resolve, job.reject).finally(() => { activeJobs--; pump(); });
     }
@@ -2635,7 +2858,7 @@ function collectPosterCandidates(root, crewWords) {
         const rawSrc = n.getAttribute('data-src') || n.getAttribute('data-lazy-src') || n.getAttribute('data-original') || n.getAttribute('src');
         if (!rawSrc || rawSrc.startsWith('data:')) continue;
         let url;
-        try { url = new URL(rawSrc, location.href); } catch (e) { continue; }
+        try { url = new URL(rawSrc, SITE_ROOT); } catch (e) { continue; }
 
         const src = url.href;
         if (seen.has(src)) continue;
@@ -2808,8 +3031,20 @@ async function tmdbEnrich(out, apiKey) {
     } catch (e) { return null; }
 }
 
-const normT = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+const titleColl = new Intl.Collator('it', { numeric: true, sensitivity: 'base' });
+const nameColl = new Intl.Collator('it');
+const normCache = new Map();
+const normT = s => {
+    s = String(s || '');
+    let r = normCache.get(s);
+    if (r === undefined) {
+        r = s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+        if (normCache.size > 20000) normCache.clear();
+        normCache.set(s, r);
+    }
+    return r;
+};
 
 const COUNTRY_MAP = [
     [/\b(usa|stati\s*uniti|america)/i, 'US'], [/\b(italia|italy)/i, 'IT'],
@@ -3368,6 +3603,7 @@ let mainMorePromise = null;
 function loadMoreMain() {
     if (mainMorePromise) return mainMorePromise;
     mainMorePromise = (async () => {
+        if (main.bg) await main.bg;
         for (let tries = 0; tries < 3 && !main.exhausted; tries++) {
             const before = main.items.length;
             const got = await pullGroup(main.group);
@@ -3888,7 +4124,7 @@ function applySort(items) {
         case 'size':     a.sort((x, y) => (y.sizeBytes || 0) - (x.sizeBytes || 0)); break;
         case 'views':    a.sort((x, y) => (y.views || 0) - (x.views || 0)); break;
         case 'replies':  a.sort((x, y) => (y.replies || 0) - (x.replies || 0)); break;
-        case 'title':    a.sort((x, y) => x.cleanTitle.localeCompare(y.cleanTitle, 'it', { numeric: true, sensitivity: 'base' })); break;
+        case 'title':    a.sort((x, y) => titleColl.compare(x.cleanTitle, y.cleanTitle)); break;
         default:         a.sort(byRelease);
     }
     return a;
@@ -4088,7 +4324,7 @@ function updateAdv() {
     setVal('seer-adv-codec', filters.codec);
     setVal('seer-adv-smin', filters.sizeMin || ''); setVal('seer-adv-smax', filters.sizeMax || '');
 
-    const names = [...new Set(lastBase.map(i => i.author).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 300);
+    const names = [...new Set(lastBase.map(i => i.author).filter(Boolean))].sort(nameColl.compare).slice(0, 300);
     const sig = names.join('|');
     const dl = $('seer-adv-rel-list');
     if (dl && dl.dataset.sig !== sig) { dl.dataset.sig = sig; dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join(''); }
@@ -4166,22 +4402,97 @@ const relSearchUrl = r => r.id
     ? `/search.php?author_id=${encodeURIComponent(r.id)}&sr=topics&sf=firstpost&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`
     : `/search.php?keywords=&author=${encodeURIComponent(r.name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`;
 
-async function fetchAvatar(id) {
-    if (!id) return null;
-    const ck = CACHE_PREFIX + 'av_' + id;
+// Small pool for profile lookups (not subject to phpBB's search flood limit)
+const avPool = { active: 0, q: [] };
+function avRun(task) {
+    return new Promise(resolve => {
+        const go = () => {
+            avPool.active++;
+            task().then(resolve, () => resolve(null)).finally(() => {
+                avPool.active--;
+                const n = avPool.q.shift();
+                if (n) n();
+            });
+        };
+        if (avPool.active < 3) go(); else avPool.q.push(go);
+    });
+}
+
+const AV_SKIP = '#username_logged_in, .header-profile, #page-header, .navbar, .headerbar, .site-description';
+
+// Free lookups: any post we already scraped carries the author's id + avatar
+function avatarFromRegistry(id, name) {
+    const n = relKey(name);
+    for (const it of registry.values()) {
+        if (!it.authorAvatar) continue;
+        if ((id && String(it.authorId) === String(id)) || (!id && n && relKey(it.author) === n)) return it.authorAvatar;
+    }
+    return null;
+}
+function idFromRegistry(name) {
+    const n = relKey(name);
+    if (!n) return null;
+    for (const it of registry.values()) if (it.authorId && relKey(it.author) === n) return it.authorId;
+    return null;
+}
+
+async function resolveUserId(name) {
+    const hit = idFromRegistry(name);
+    if (hit) return hit;
+    const ck = CACHE_PREFIX + 'uid_' + relKey(name).replace(/[^a-z0-9]/g, '_');
     const c = cacheGet(ck);
-    if (c) { try { return JSON.parse(c).src || null; } catch (e) {} }
-    try {
-        await netGate();
-        const r = await fetch(`/memberlist.php?mode=viewprofile&u=${encodeURIComponent(id)}`, { credentials: 'same-origin' });
-        if (!r.ok) return null;
-        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-        const img = doc.querySelector('.profile-avatar img, .avatar-container img, dl.left-box img.avatar, img.avatar, .postprofile img');
-        const s = img && img.getAttribute('src');
-        const src = s && !s.startsWith('data:') ? absUrl(s) : null;
-        cacheSet(ck, JSON.stringify({ t: Date.now(), src }));
-        return src;
-    } catch (e) { return null; }
+    if (c) { try { const j = JSON.parse(c); if (j.id || Date.now() - j.t < 864e5) return j.id || null; } catch (e) {} }
+    return avRun(async () => {
+        try {
+            const r = await fetch(`/memberlist.php?mode=searchuser&username=${encodeURIComponent(name)}&sk=c&sd=a`, { credentials: 'same-origin' });
+            if (!r.ok) return null;
+            const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+            const a = [...doc.querySelectorAll('a[href*="mode=viewprofile"]')]
+                .find(x => /[?&]u=\d+/.test(x.getAttribute('href')) && relKey(x.textContent) === relKey(name));
+            const id = a ? a.getAttribute('href').match(/[?&]u=(\d+)/)[1] : null;
+            cacheSet(ck, JSON.stringify({ t: Date.now(), id }));
+            return id;
+        } catch (e) { return null; }
+    });
+}
+
+async function fetchAvatar(id, name) {
+    const hit = avatarFromRegistry(id, name);
+    if (hit) return hit;
+    if (!id) return null;
+    const ck = CACHE_PREFIX + 'av2_' + id;
+    const c = cacheGet(ck);
+    if (c) { try { const j = JSON.parse(c); if (j.src || Date.now() - j.t < 864e5) return j.src || null; } catch (e) {} }
+    return avRun(async () => {
+        try {
+            const r = await fetch(`/memberlist.php?mode=viewprofile&u=${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+            if (!r.ok) return null;
+            const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+            const sels = ['.profile-avatar img', 'dt.profile-avatar img', '.avatar-container img', 'dl.left-box img.avatar', '.postprofile img.avatar', 'img.avatar'];
+            let img = null;
+            for (const sel of sels) {
+                img = [...doc.querySelectorAll(sel)].find(i => !i.closest(AV_SKIP));
+                if (img) break;
+            }
+            const s = img && (img.getAttribute('data-src') || img.getAttribute('src'));
+            let src = null;
+            if (s && !s.startsWith('data:')) { try { src = new URL(s, r.url || location.href).href; } catch (e) { src = null; } }
+            cacheSet(ck, JSON.stringify({ t: Date.now(), src }));
+            return src;
+        } catch (e) { return null; }
+    });
+}
+
+// r = { name, id? }: resolves the user id from the name when the table had no profile link
+async function getRelAvatar(r) {
+    let id = r.id || null;
+    if (!id) { id = await resolveUserId(r.name); if (id) r.id = id; }
+    return fetchAvatar(id, r.name);
+}
+
+function setRlAvatar(card, src) {
+    const av = card.querySelector('.seer-rl-av');
+    if (av) av.innerHTML = `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer">`;
 }
 
 function renderRelPanel() {
@@ -4189,10 +4500,14 @@ function renderRelPanel() {
     if (!p) return;
     const on = view.key === 'releaser' && rel && !search.active;
     p.classList.toggle('show', !!on);
+    const rs = $('seer-rel-search');
+    if (rs) rs.classList.toggle('show', !!on);
+    updateRelHint();
     if (!on) { p.innerHTML = ''; return; }
 
-    const cnt = { all: rel.items.length, film: 0, series: 0, other: 0 };
-    rel.items.forEach(it => { cnt[relCatOf(it)]++; });
+    const relPool = rel.sq ? rel.sq.items : rel.items;
+    const cnt = { all: relPool.length, film: 0, series: 0, other: 0 };
+    relPool.forEach(it => { cnt[relCatOf(it)]++; });
     const totalTxt = rel.total > 0
         ? `${rel.total} release totali${rel.items.length < rel.total ? ` · ${rel.items.length} caricate` : ''}`
         : `${rel.items.length}${rel.exhausted ? '' : '+'} release`;
@@ -4238,6 +4553,88 @@ async function loadReleaserPage() {
     }
 }
 
+// ---- Barra di ricerca nella pagina del releaser ----
+// digitare = filtra le release già caricate; Invio = cerca tra TUTTE le sue release sul forum
+const relKeywordUrl = (r, q) =>
+    `/search.php?keywords=${encodeURIComponent(q)}&terms=all&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
+    (r.id ? `&author_id=${encodeURIComponent(r.id)}` : `&author=${encodeURIComponent(r.name)}`) + `&submit=Cerca`;
+
+function updateRelHint() {
+    const h = $('seer-rel-hint');
+    if (!h) return;
+    if (!rel || view.key !== 'releaser' || search.active) { h.textContent = ''; return; }
+    const q = (rel.q || '').trim();
+    if (rel.sq) {
+        const n = rel.sq.items.length;
+        h.textContent = rel.sq.loading
+            ? `🌐 Ricerca sul forum… (${n} trovate)`
+            : `🌐 ${n}${rel.sq.exhausted ? '' : '+'} risultati sul forum per "${rel.sq.query}"`;
+    } else if (q.length >= 3) {
+        h.textContent = `🔎 Filtro sulle ${rel.items.length} release già caricate — premi Invio per cercare tra tutte le sue release.`;
+    } else {
+        h.textContent = '';
+    }
+}
+
+// Messaggio per lista vuota nella vista releaser (null = usa quelli standard)
+function relEmptyMsg() {
+    if (!rel) return null;
+    const q = (rel.q || '').trim();
+    if (rel.sq) {
+        if (rel.sq.loading) return `🔍 Ricerca di "${esc(rel.sq.query)}" tra le release di ${esc(rel.name)}…`;
+        if (!rel.sq.items.length) return `Nessun risultato per "${esc(rel.sq.query)}" tra le release di ${esc(rel.name)}.`;
+        return null;
+    }
+    if (q.length >= 3 && rel.items.length) return `Nessuna release già caricata corrisponde a "${esc(q)}".<br>Premi <b>Invio</b> per cercare tra tutte le release di ${esc(rel.name)}.`;
+    return null;
+}
+
+async function loadRelSearchPage() {
+    const mine = rel, sq = mine && mine.sq;
+    if (!sq || sq.loading || sq.exhausted) return;
+    sq.loading = true;
+    renderRelPanel();
+    updateRelHint();
+    try {
+        const page = await fetchSearchPage(sq.nextUrl || relKeywordUrl(mine, sq.query), { relaxed: true, fallbackType: null });
+        if (rel !== mine || mine.sq !== sq) return;
+        if (page.flood) {
+            sq.exhausted = true;
+            toast('⏳ Limite frequenza ricerche del forum raggiunto: attendi qualche secondo e premi Invio di nuovo', 'warn', 4500);
+            return;
+        }
+        const own = page.items.filter(it => !it.author || relKey(it.author) === relKey(mine.name));
+        sq.items = uniqById([...sq.items, ...own]);
+        sq.nextUrl = page.nextUrl;
+        sq.exhausted = !page.nextUrl;
+    } catch (e) {
+        console.error('Releaser search failed', e);
+        if (rel === mine && mine.sq === sq) { sq.exhausted = true; toast('Ricerca non riuscita: controlla la connessione', 'err'); }
+    } finally {
+        sq.loading = false;
+        if (rel === mine && mine.sq === sq) {
+            renderRelPanel();
+            if (!search.active) renderDeck(localFilterValue(), true);
+            updateRelHint();
+        }
+    }
+}
+
+function relRunSearch() {
+    if (view.key !== 'releaser' || !rel || search.active) return;
+    const q = ($('seer-rel-q').value || '').trim();
+    rel.q = q;
+    if (q.length < 3) {
+        rel.sq = null;
+        if (q) toast('Scrivi almeno 3 caratteri per cercare', 'warn');
+        renderDeck(localFilterValue(), true);
+        return;
+    }
+    rel.sq = { query: q, items: [], nextUrl: null, exhausted: false, loading: false };
+    loadRelSearchPage();
+    renderDeck('', true);
+}
+
 async function openReleaser(name, id, avatar) {
     if (!name) return;
     hideModal();
@@ -4246,14 +4643,15 @@ async function openReleaser(name, id, avatar) {
     search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
     $('seer-search-input').value = '';
     const prev = view.key === 'releaser' ? (rel && rel.prev) : { key: view.key, section: view.section };
-    const mine = rel = { name, id: id || null, avatar: avatar || null, items: [], total: 0, cat: 'all', nextUrl: null, exhausted: false, loading: false, error: false, prev: prev || { key: 'home', section: null } };
+    const mine = rel = { name, id: id || null, avatar: avatar || null, items: [], total: 0, cat: 'all', q: '', sq: null, nextUrl: null, exhausted: false, loading: false, error: false, prev: prev || { key: 'home', section: null } };
     view = { key: 'releaser', section: null };
+    { const ri = $('seer-rel-q'); if (ri) ri.value = ''; }
     $('seer-sidebar').classList.remove('open');
     $('mirseer-app').scrollTop = 0;
     updateChrome();
     showSkeleton();
 
-    if (!mine.avatar && id) fetchAvatar(id).then(src => { if (rel === mine && src) { mine.avatar = src; renderRelPanel(); } });
+    if (!mine.avatar) getRelAvatar({ name, id }).then(src => { if (rel === mine && src) { mine.avatar = src; renderRelPanel(); } });
 
     for (let i = 0; i < INITIAL_PAGES && rel === mine && !mine.exhausted && !mine.error; i++) await loadReleaserPage();
 }
@@ -4330,7 +4728,7 @@ async function autoPage() {
         for (let i = 0; i < AUTO_PAGES_MAX; i++) {
             if (search.active || !wantMore() || !GX_VIEWS.includes(view.key)) break;
             const done = view.key === 'section' ? currentSectionStore().exhausted : main.exhausted;
-            if (done || getVisibleItems().length >= minNeeded()) break;
+            if (done || lastDisplayed.length >= minNeeded()) break;
             if (view.key === 'section') await loadSection(view.section, currentSectionStore());
             else await loadMoreMain();
             renderDeck(localFilterValue(), true);
@@ -4343,7 +4741,7 @@ function getVisibleItems() {
     let base;
     if (search.active) base = search.items;
     else if (view.key === 'favs') base = uniqById([...wlNew.values(), ...favItems()]);
-    else if (view.key === 'releaser') base = rel ? rel.items : [];
+    else if (view.key === 'releaser') base = rel ? (rel.sq ? rel.sq.items : rel.items) : [];
     else if (view.key === 'section') base = currentSectionStore().items;
     else {
         base = main.items;
@@ -4386,7 +4784,10 @@ function updateLoadMore() {
     let show = true, label = '📥 Carica Altre Uscite';
     if (search.active) { show = !!search.nextUrl; label = '📥 Carica altri risultati'; }
     else if (view.key === 'favs') { show = false; }
-    else if (view.key === 'releaser') { show = !!rel && !rel.exhausted; label = '📥 Carica altre release'; }
+    else if (view.key === 'releaser') {
+        if (rel && rel.sq) { show = !rel.sq.exhausted; label = '📥 Carica altri risultati'; }
+        else { show = !!rel && !rel.exhausted; label = '📥 Carica altre release'; }
+    }
     else if (view.key === 'section') { show = !currentSectionStore().exhausted; label = '📥 Carica altri topic'; }
     else { show = !main.exhausted || (gxApplies() && !gx.exhausted); }
     btn.style.display = show ? '' : 'none';
@@ -4439,6 +4840,7 @@ function updateChrome() {
     else if (view.key === 'films') t.textContent = '🎬 Film Disponibili';
     else if (view.key === 'series') t.textContent = '📺 Serie TV';
     else if (view.key === 'favs') t.textContent = '⭐ Watchlist';
+    else if (view.key === 'releasers') t.textContent = '🏆 Releasers';
     else if (view.key === 'section') t.textContent = iconFor(view.section.name) + ' ' + view.section.name;
     else t.textContent = '🆕 Ultime Release';
 
@@ -4455,6 +4857,7 @@ function updateChrome() {
 
     document.querySelectorAll('#seer-view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === viewMode));
     renderGenres(); renderWlPanel(); syncHash();
+    ['seer-facets', 'seer-genres', 'seer-adv', 'seer-sel-btn', 'seer-view-toggle', 'seer-sort-select'].forEach(id => { const e = $(id); if (e) e.style.display = (view.key === 'releasers' && !search.active) ? 'none' : ''; });
     renderFacets();
     renderRelPanel();
     updateAdv();
@@ -4568,6 +4971,7 @@ function renderDeck(filterQuery = '', noAuto = false) {
     if (displayed.length === 0) {
         lastDisplayed = [];
         if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Watchlist vuota: premi ☆ su una release, oppure ➕ Segui da una scheda per seguire un releaser o una serie.');
+        else if (view.key === 'releaser' && !search.active && rel && relEmptyMsg()) showListMessage(relEmptyMsg());
         else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
         else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita corrisponde ai filtri attivi. Prova ad azzerarli o a caricare altre uscite.');
         else showListMessage('Nessuna uscita da mostrare qui.');
@@ -4576,6 +4980,7 @@ function renderDeck(filterQuery = '', noAuto = false) {
         return;
     }
 
+    const frag = document.createDocumentFragment();
     let idx = 0;
     const addRow = item => {
         const row = document.createElement('div');
@@ -4591,7 +4996,7 @@ function renderDeck(filterQuery = '', noAuto = false) {
             if (e.target.closest('.seer-fav-btn')) { e.stopPropagation(); toggleFav(item); return; }
             openDetailModal(item);
         };
-        listContainer.appendChild(row);
+        frag.appendChild(row);
         if (!item.posterTried) posterObserver.observe(row);
     };
 
@@ -4607,18 +5012,19 @@ function renderDeck(filterQuery = '', noAuto = false) {
             const h = document.createElement('div');
             h.className = 'seer-group-title';
             h.innerHTML = `<span>${iconFor(g)} ${esc(g)}</span><em>${arr.length}</em>`;
-            listContainer.appendChild(h);
+            frag.appendChild(h);
             arr.forEach(addRow);
         });
     } else if (view.key === 'favs' && !search.active && wlNew.size) {
         const isNew = it => wlNew.has(String(it.id));
-        const head = (t, n) => { const h = document.createElement('div'); h.className = 'seer-group-title'; h.innerHTML = `<span>${t}</span><em>${n}</em>`; listContainer.appendChild(h); };
+        const head = (t, n) => { const h = document.createElement('div'); h.className = 'seer-group-title'; h.innerHTML = `<span>${t}</span><em>${n}</em>`; frag.appendChild(h); };
         const fresh = displayed.filter(isNew), saved = displayed.filter(it => !isNew(it));
         if (fresh.length) { head('🆕 Nuove uscite dai tuoi seguiti', fresh.length); fresh.forEach(addRow); }
         if (saved.length) { head('⭐ Salvati', saved.length); saved.forEach(addRow); }
     } else {
         displayed.forEach(addRow);
     }
+    listContainer.appendChild(frag);
     lastDisplayed = [...listContainer.querySelectorAll('.seer-row')].map(r => registry.get(String(r.dataset.topicId))).filter(Boolean);
     kbApply(false);
     if ($('seer-modal-overlay').style.display === 'flex') updateModalNav();
@@ -4627,6 +5033,10 @@ function renderDeck(filterQuery = '', noAuto = false) {
 }
 
 const localFilterValue = () => {
+    if (view.key === 'releaser' && rel && !search.active) {
+        const rq = (rel.q || '').trim();
+        return (!rel.sq && rq.length >= 3) ? rq : '';
+    }
     const q = $('seer-search-input').value.trim();
     return (!search.active && q.length >= 3) ? q : '';
 };
@@ -4663,16 +5073,24 @@ async function setViewCore(key, section = null) {
         if (!store.loaded) {
             updateChrome();
             showSkeleton();
-            await loadSection(section, store, INITIAL_PAGES);
+            await loadSection(section, store, 1);
             if (token !== viewToken) return;
+            store.bg = (async () => {
+                for (let p = 1; p < INITIAL_PAGES && !groupDone(store.group); p++) {
+                    await loadSection(section, store, 1, true);
+                    if (view.key === 'section' && view.section && String(view.section.id) === String(section.id) && !search.active) renderDeck(localFilterValue(), true);
+                }
+            })();
         }
-    } else if (key !== 'favs' && !main.loaded) {
+       } else if (key !== 'favs' && key !== 'releasers' && !main.loaded) {
         updateChrome();
         showSkeleton();
         await loadMain();
         if (token !== viewToken) return;
     }
     renderDeck();
+    if (view.key === 'releasers' && !search.active) { cancelQueued(); updateChrome(); renderReleasersPage(); return; }
+    if (key === 'releasers') startRelRefresh();
 }
 
 // =====================================================================
@@ -4755,13 +5173,18 @@ async function loadMain() {
         makeCursor(FILM_FORUM_ID, 'Film', false, true),
         makeCursor(SERIES_FORUM_ID, 'Serie TV', false, true)
     ], false, MAIN_SUB_EXCLUDE_RE);
-    let all = [];
-    for (let p = 0; p < INITIAL_PAGES && !groupDone(main.group); p++) {
-        all = all.concat(await pullGroup(main.group));
-    }
-    main.items = uniqById(all);
+    main.items = uniqById(await pullGroup(main.group));
     main.exhausted = groupDone(main.group);
     main.loaded = true;
+
+    // anti-bump pages keep loading in the background, the list re-sorts as they arrive
+    main.bg = (async () => {
+        for (let p = 1; p < INITIAL_PAGES && !groupDone(main.group); p++) {
+            main.items = uniqById([...main.items, ...await pullGroup(main.group)]);
+            main.exhausted = groupDone(main.group);
+            if (['home', 'films', 'series'].includes(view.key) && !search.active) renderDeck(localFilterValue(), true);
+        }
+    })();
     if (settings.heroEnabled) buildHero();
 }
 
@@ -4771,7 +5194,8 @@ async function loadMorePages() {
     renderDeck(localFilterValue());
 }
 
-async function loadSection(section, store, pages = 1) {
+async function loadSection(section, store, pages = 1, fromBg = false) {
+    if (!fromBg && store.bg) await store.bg;
     if (!store.group) store.group = makeGroup([makeCursor(section.id, section.name, true, true)], true, SIDE_HIDE_RE);
     let got = [];
     for (let p = 0; p < pages && !groupDone(store.group); p++) got = got.concat(await pullGroup(store.group));
@@ -4878,7 +5302,7 @@ async function fetchSearchPage(url, sc) {
     const msg = (doc.querySelector('#message') || {}).textContent || '';
     const flood = items.length === 0 && /presto|soon|flood/i.test(msg);
     const next = doc.querySelector('a[rel="next"]');
-    const nextUrl = next ? new URL(next.getAttribute('href'), location.href).href : null;
+    const nextUrl = next ? fixUrl(new URL(next.getAttribute('href'), SITE_ROOT).href) : null;
 
     const info = [...doc.querySelectorAll('.searchresults-title, .action-bar .pagination, .pagination')].map(e => e.textContent).join(' ');
     const tm = info.match(/(\d[\d.,]*)\s*(?:risultat|corrispondenz|match|result)/i);
@@ -4946,6 +5370,22 @@ function exitSearchMode(filterQuery = '') {
     renderDeck(filterQuery);
 }
 
+// Performance: the browser skips layout/paint of off-screen rows
+GM_addStyle(`
+.seer-row { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+.seer-row.is-card { contain-intrinsic-size: auto 340px; }
+#mirseer-app.seer-compact .seer-row { contain-intrinsic-size: auto 62px; }
+#mirseer-app.seer-compact .seer-row.is-card { contain-intrinsic-size: auto 280px; }
+`);
+
+// Barra di ricerca nella pagina del releaser
+GM_addStyle(`
+.seer-rel-search { display: none; margin: -8px 0 16px; }
+.seer-rel-search.show { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.seer-rel-search .seer-search-wrap { flex: 1 1 320px; max-width: 560px; }
+.seer-rel-search-hint { font-size: 12.5px; font-weight: 600; color: var(--seer-text-muted); }
+`);
+
 // Piccoli stili aggiuntivi (select del pannello avanzato, contatori nelle pillole releaser)
 GM_addStyle(`
 .seer-adv select.seer-adv-input { width: auto; cursor: pointer; }
@@ -4998,7 +5438,8 @@ function init() {
             <aside class="seer-sidebar" id="seer-sidebar">
                 <div class="seer-side-title">Navigazione</div>
                 <button class="seer-side-item active" data-nav="home"><span class="ico">🏠</span><span class="lbl">Home</span></button>
-                <button class="seer-side-item" data-nav="favs"><span class="ico">⭐</span><span class="lbl">Watchlist</span><span class="seer-side-count" id="seer-fav-count"></span></button>
+                <button class="seer-side-item" data-nav="releasers"><span class="ico">🏆</span><span class="lbl">Releasers</span></button>
+<button class="seer-side-item" data-nav="favs"><span class="ico">⭐</span><span class="lbl">Watchlist</span><span class="seer-side-count" id="seer-fav-count"></span></button>
                 <div class="seer-side-title">🧭 Sezioni</div>
                 <div id="seer-side-sections"></div>
             </aside>
@@ -5025,6 +5466,13 @@ function init() {
                     </div>
                 </div>
                 <div class="seer-rel-panel" id="seer-rel-panel"></div>
+                <div class="seer-rel-search" id="seer-rel-search">
+                    <div class="seer-search-wrap">
+                        <input type="text" class="seer-search" id="seer-rel-q" placeholder="Cerca tra le release di questo releaser…  (Invio = cerca su tutto il forum)" autocomplete="off" spellcheck="false" />
+                        <button class="seer-search-btn" id="seer-rel-submit" title="Cerca tra tutte le sue release (Invio)">🔍</button>
+                    </div>
+                    <span class="seer-rel-search-hint" id="seer-rel-hint"></span>
+                </div>
                 <div class="seer-wl-panel" id="seer-wl-panel"></div>
                 <div id="seer-search-hint"></div>
                 <div class="seer-facets" id="seer-facets"></div>
@@ -5833,7 +6281,11 @@ function init() {
 
     $('seer-load-more-btn').onclick = async () => {
         if (search.active) loadMoreSearch();
-        else if (view.key === 'releaser') loadMoreReleaser();
+        else if (view.key === 'releasers') { show = false; }
+        else if (view.key === 'releaser') {
+            if (rel && rel.sq) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; loadRelSearchPage(); }
+            else loadMoreReleaser();
+        }
         else if (gxApplies() && !gx.exhausted) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; await loadGxPage(); updateLoadMore(); }
         else if (view.key === 'section') loadMoreSection();
         else loadMorePages();
@@ -5899,7 +6351,11 @@ function init() {
             exitSearchMode();
             return;
         }
-        if (!search.active) renderDeck(q);          // subito: ricerca fuzzy locale tollerante ai refusi
+        clearTimeout(searchInput._t);
+        if (!search.active) searchInput._t = setTimeout(() => {
+            const cur = searchInput.value.trim();
+            if (!search.active && cur.length >= 3) renderDeck(cur);
+        }, 120);          // subito: ricerca fuzzy locale tollerante ai refusi
         searchTimer = setTimeout(() => runSearch(q), 700);
     };
 
@@ -6058,6 +6514,50 @@ function init() {
     $('seer-pref-density').onchange = e => { settings.density = e.target.value === 'compact' ? 'compact' : 'comfortable'; setPref('density', settings.density); applyAppearance(); };
     markSw();
 
+    $('seer-main-list').addEventListener('click', relPageClick);
+
+    // --- Ricerca nella pagina del releaser: digita = filtra caricate, Invio = cerca tra tutte ---
+    {
+        const ri = $('seer-rel-q');
+        let rt = null;
+        ri.addEventListener('input', () => {
+            if (!rel) return;
+            rel.q = ri.value;
+            const had = !!rel.sq;
+            rel.sq = null;                         // digitando si torna al filtro locale
+            clearTimeout(rt);
+            rt = setTimeout(() => renderDeck(localFilterValue(), true), had ? 0 : 120);
+        });
+        ri.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); clearTimeout(rt); relRunSearch(); }
+            else if (e.key === 'Escape' && ri.value) {
+                e.preventDefault(); e.stopPropagation();
+                clearTimeout(rt);
+                ri.value = '';
+                if (rel) { rel.q = ''; rel.sq = null; }
+                renderDeck(localFilterValue(), true);
+            }
+        });
+        $('seer-rel-submit').onclick = () => { clearTimeout(rt); relRunSearch(); };
+    }
+    $('seer-main-list').addEventListener('error', e => {
+        const img = e.target;
+        if (!(img instanceof HTMLImageElement)) return;
+        const card = img.closest('.seer-rl-card');
+        if (!card) return;
+        const r = relEntry(card.dataset.name);
+        const bad = img.getAttribute('src');
+        img.parentElement.textContent = '👤';
+        if (r.avTried) return;
+        r.avTried = true;
+        r.avatar = null;
+        getRelAvatar(r).then(src => {
+            if (src && src !== bad) { r.avatar = src; if (card.isConnected) setRlAvatar(card, src); }
+        });
+    }, true);
+    $('seer-main-list').addEventListener('input', e => {
+        if (e.target.id === 'seer-rl-q') { relPage.q = e.target.value.trim().toLowerCase(); paintRlGroups(); }
+    });
     if (location.hash.startsWith(HASH_PREFIX)) fab.click();
 
     renderFacets();
