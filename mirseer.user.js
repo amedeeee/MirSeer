@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.2
+// @version      1.3
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -28,6 +28,8 @@ const HERO_POOL = 14;
 const HERO_MAX_TOTAL = 100;
 
 const PAGE_SIZE = 25;
+const INITIAL_PAGES = 3;          // buffer iniziale: start=0, 25, 50 (anti-bump)
+const NET_GAP = 350;              // pausa minima (ms) tra richieste a viewforum/search (anti flood phpBB)
 const IMG_HI_COUNT = 8;
 
 const EXCLUDE_SELECTOR = '#recent-topics, .recent-topics, .recenttopics, [class*="recent_topics"], [class*="active-topics"], [id*="active-topics"]';
@@ -269,12 +271,14 @@ GM_addStyle(`
 .tag-4k { background: linear-gradient(135deg, #7c3aed, #9333ea); color: #fff; }
 .tag-1080 { background: #2563eb; color: #fff; }
 .tag-720 { background: #0284c7; color: #fff; }
+.tag-sd { background: #475569; color: #fff; }
 .tag-hdr { background: #d946ef; color: #fff; }
 .tag-dv { background: #f59e0b; color: #000; }
 .tag-season { background: rgba(99,102,241,0.2); color: #c7d2fe; border: 1px solid rgba(99,102,241,0.4); }
 .tag-text { background: rgba(148,163,184,0.18); color: #e2e8f0; border: 1px solid rgba(148,163,184,0.35); }
 .tag-audio { background: rgba(16,185,129,0.18); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.4); }
 .tag-file { background: rgba(14,165,233,0.18); color: #7dd3fc; border: 1px solid rgba(14,165,233,0.4); }
+.tag-vers { background: rgba(236,72,153,0.18); color: #f9a8d4; border: 1px solid rgba(236,72,153,0.4); }
 .seer-specs-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; }
 .seer-pill { border-radius: 5px; padding: 2px 7px; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
 .seer-pill.audio { color: #34d399; background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25); }
@@ -296,49 +300,80 @@ GM_addStyle(`
     box-shadow: 0 30px 80px rgba(0,0,0,0.9), 0 0 40px rgba(99,102,241,0.2);
     overflow: hidden; position: relative; display: flex; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.seer-detail-window.is-portrait, .seer-detail-window:not(.is-landscape) { flex-direction: row; width: 100%; max-width: 960px; height: 560px; max-height: 92vh; }
+.seer-detail-window.is-portrait, .seer-detail-window:not(.is-landscape) { flex-direction: row; width: 100%; max-width: 960px; height: 600px; max-height: 92vh; }
 .seer-detail-window.is-portrait .seer-modal-left, .seer-detail-window:not(.is-landscape) .seer-modal-left {
-    width: 320px; min-width: 280px; height: 100%; background: #070b14; position: relative; overflow: hidden;
+    width: 300px; min-width: 260px; height: 100%; background: #070b14; position: relative; overflow: hidden;
     display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--seer-border); flex-shrink: 0;
 }
 .seer-detail-window.is-portrait .seer-modal-left img, .seer-detail-window:not(.is-landscape) .seer-modal-left img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
-.seer-detail-window.is-landscape { flex-direction: column; width: 100%; max-width: 820px; height: auto; max-height: 90vh; }
+.seer-detail-window.is-landscape { flex-direction: column; width: 100%; max-width: 820px; height: auto; max-height: 92vh; }
 .seer-detail-window.is-landscape .seer-modal-left {
-    width: 100%; height: 250px; min-width: unset; background: #060913; position: relative; overflow: hidden;
+    width: 100%; height: 220px; min-width: unset; background: #060913; position: relative; overflow: hidden;
     border-right: none; border-bottom: 1px solid var(--seer-border); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .seer-detail-window.is-landscape .seer-modal-left img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
 .seer-detail-window.is-landscape .seer-modal-left::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,22,38,0) 55%, #0f1626 100%); pointer-events: none; }
-.seer-modal-right { flex: 1; padding: 26px 30px; display: flex; flex-direction: column; overflow-y: auto; position: relative; min-height: 0; }
+.seer-modal-right { flex: 1; padding: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0; min-width: 0; }
+.seer-modal-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px 10px; }
+.seer-modal-foot {
+    flex-shrink: 0; padding: 12px 28px 20px; display: flex; flex-direction: column; gap: 9px;
+    border-top: 1px solid var(--seer-border); background: #0f1626;
+}
+.seer-modal-foot .seer-action-btn, .seer-modal-foot .seer-magnet-box { margin-top: 0 !important; }
 .seer-modal-close {
     position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
     border: 1px solid var(--seer-border); color: #fff; width: 34px; height: 34px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; z-index: 30; transition: all 0.2s;
 }
 .seer-modal-close:hover { background: #ef4444; transform: scale(1.1); }
-.seer-modal-title { font-size: 22px; font-weight: 800; letter-spacing: -0.4px; margin: 0 0 10px 0; padding-right: 36px; color: #fff; line-height: 1.3; }
-.seer-chips-row { display: flex; align-items: center; gap: 7px; margin-bottom: 15px; flex-wrap: wrap; }
+.seer-modal-title { font-size: 22px; font-weight: 800; letter-spacing: -0.4px; margin: 0 0 10px 0; padding-right: 40px; color: #fff; line-height: 1.3; }
+.seer-modal-metarow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.seer-meta-pill {
+    display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--seer-border);
+    color: #e2e8f0 !important; font-size: 12px; font-weight: 700; padding: 4px 11px; border-radius: 20px; cursor: pointer;
+    text-decoration: none !important; transition: all 0.2s; font-family: inherit;
+}
+.seer-meta-pill:hover { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff !important; }
+.seer-meta-pill small { font-weight: 600; opacity: 0.7; font-size: 11px; }
+.seer-chips-row { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; flex-wrap: wrap; }
 .seer-chip { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); padding: 4px 10px; border-radius: 7px; font-size: 12px; font-weight: 700; color: #e2e8f0; }
 .seer-chip.chip-audio { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.35); color: #34d399; }
 .seer-chip.chip-subs { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.35); color: #fbbf24; }
 .seer-chip.chip-season { background: rgba(99,102,241,0.18); border-color: rgba(99,102,241,0.45); color: #a5b4fc; }
 .seer-chip.chip-file { background: rgba(14,165,233,0.15); border-color: rgba(14,165,233,0.4); color: #7dd3fc; }
-.seer-specs-matrix { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: rgba(0,0,0,0.25); border: 1px solid var(--seer-border); padding: 12px; border-radius: 10px; margin-bottom: 15px; }
-.seer-spec-box { display: flex; flex-direction: column; }
-.seer-spec-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: var(--seer-text-muted); margin-bottom: 2px; }
-.seer-spec-value { font-size: 12.5px; font-weight: 700; color: #f1f5f9; }
-.seer-synopsis-box { margin-bottom: 15px; }
+
+.seer-specs-ribbon {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; padding: 9px 10px;
+    background: rgba(0,0,0,0.25); border: 1px solid var(--seer-border); border-radius: 10px;
+}
+.seer-specs-ribbon .seer-tag { font-size: 11.5px; padding: 4px 9px; border-radius: 7px; }
+.seer-specs-ribbon .seer-chip { padding: 3px 9px; font-size: 11.5px; }
+.seer-detail-window.no-specs .seer-specs-ribbon { display: none; }
+
+.seer-version-bar { margin-bottom: 14px; }
+.seer-ver-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: var(--seer-accent); margin-bottom: 6px; }
+.seer-ver-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.seer-ver-tab {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--seer-border); color: #cbd5e1; font-size: 12px; font-weight: 700;
+    padding: 5px 12px; border-radius: 8px; cursor: pointer; font-family: inherit; transition: all 0.2s;
+}
+.seer-ver-tab:hover { border-color: var(--seer-accent); color: #fff; }
+.seer-ver-tab.active { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff; box-shadow: 0 4px 12px var(--seer-accent-glow); }
+
+.seer-synopsis-box { margin-bottom: 14px; }
 .seer-synopsis-head { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: var(--seer-accent); margin-bottom: 5px; }
-.seer-synopsis-body { color: #cbd5e1; font-size: 13px; line-height: 1.6; margin: 0; max-height: 110px; overflow-y: auto; padding-right: 6px; }
+.seer-synopsis-body { color: #cbd5e1; font-size: 13px; line-height: 1.6; margin: 0; }
+.seer-synopsis-body.clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.seer-syn-toggle { display: none; background: none; border: none; color: #a5b4fc; font-size: 12px; font-weight: 800; cursor: pointer; padding: 5px 0 0; font-family: inherit; }
+.seer-syn-toggle:hover { text-decoration: underline; }
 .seer-text-box {
-    display: none; flex: 1; min-height: 120px; max-height: 340px; overflow-y: auto; margin-bottom: 15px;
+    display: none; flex: 1; min-height: 120px; max-height: 340px; overflow-y: auto; margin-bottom: 14px;
     background: rgba(0,0,0,0.25); border: 1px solid var(--seer-border); border-radius: 10px; padding: 14px 16px;
     color: #cbd5e1; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
 }
 .seer-detail-window.text-mode .seer-text-box { display: block; }
 .seer-detail-window.text-mode .seer-synopsis-box { display: none; }
-.seer-detail-window.no-specs .seer-specs-matrix { display: none; }
-.seer-raw-box { background: rgba(0,0,0,0.35); border-radius: 8px; padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #64748b; word-break: break-all; margin-bottom: 15px; border: 1px dashed rgba(255,255,255,0.08); }
+.seer-raw-box { margin: 0 14px 10px; background: rgba(0,0,0,0.35); border-radius: 8px; padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #94a3b8; word-break: break-all; border: 1px dashed rgba(255,255,255,0.08); }
 .seer-action-btn {
     background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; border: none; padding: 14px 22px;
     border-radius: 10px; font-size: 14.5px; font-weight: 800; cursor: pointer; display: flex;
@@ -389,8 +424,9 @@ GM_addStyle(`
 }
 @media (max-width: 820px) {
     .seer-detail-window { flex-direction: column !important; height: 92vh !important; }
-    .seer-modal-left { width: 100% !important; height: 200px !important; min-width: unset !important; border-right: none !important; border-bottom: 1px solid var(--seer-border) !important; }
-    .seer-specs-matrix { grid-template-columns: repeat(2, 1fr); }
+    .seer-modal-left { width: 100% !important; height: 180px !important; min-width: unset !important; border-right: none !important; border-bottom: 1px solid var(--seer-border) !important; }
+    .seer-modal-scroll { padding: 18px 16px 8px; }
+    .seer-modal-foot { padding: 10px 16px 16px; }
     .seer-title { max-width: 100%; }
     .seer-search-wrap { max-width: none; }
     .seer-search-filter { max-width: 118px; }
@@ -409,15 +445,6 @@ GM_addStyle(`
 }
 .seer-theme-btn:hover { background: rgba(99,102,241,0.25); border-color: var(--seer-accent); }
 
-.seer-modal-forum {
-    position: absolute; top: 16px; right: 58px; z-index: 30; height: 34px; padding: 0 12px;
-    display: flex; align-items: center; gap: 6px; border-radius: 17px;
-    background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); border: 1px solid var(--seer-border);
-    color: #fff !important; font-size: 12px; font-weight: 700; text-decoration: none !important; transition: all 0.2s;
-}
-.seer-modal-forum:hover { background: var(--seer-accent); transform: scale(1.05); }
-.seer-modal-title { padding-right: 150px; }
-
 #mirseer-app.seer-light {
     color-scheme: light;
     --seer-bg: #f4f6fb; --seer-card: #ffffff; --seer-card-hover: #f1f5ff;
@@ -431,7 +458,7 @@ GM_addStyle(`
 }
 `);
 
-// Nuovi componenti: vista griglia, filtri rapidi, preferiti, scaricati, trailer, MediaInfo, toast
+// Vista griglia, filtri rapidi/avanzati, preferiti, scaricati, trailer, MediaInfo, toast, releaser
 GM_addStyle(`
 .seer-view-toggle { display: inline-flex; border: 1px solid var(--seer-border); border-radius: 9px; overflow: hidden; flex-shrink: 0; }
 .seer-view-toggle button {
@@ -452,6 +479,22 @@ GM_addStyle(`
 .seer-facet.reset { border-style: dashed; color: #f87171; }
 .seer-facet.reset:hover { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.5); color: #f87171; }
 .seer-facet-sep { width: 1px; height: 20px; background: var(--seer-border); margin: 0 2px; }
+
+.seer-adv {
+    display: none; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: -6px 0 16px; padding: 12px 16px;
+    border: 1px solid var(--seer-border); border-radius: 12px; background: rgba(255,255,255,0.025);
+}
+.seer-adv.open { display: flex; }
+.seer-adv-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; font-weight: 700; color: #cbd5e1; }
+.seer-adv-item b { color: #fff; min-width: 32px; display: inline-block; }
+.seer-adv input[type=range] { width: 150px; accent-color: var(--seer-accent); cursor: pointer; }
+.seer-adv-input {
+    width: 84px; padding: 6px 9px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--seer-border);
+    color: #fff; font-size: 12.5px; outline: none; font-family: inherit;
+}
+.seer-adv-input.wide { width: 170px; }
+.seer-adv-input:focus { border-color: var(--seer-accent); box-shadow: 0 0 0 3px var(--seer-accent-glow); }
+.seer-adv-note { font-size: 11.5px; color: var(--seer-text-muted); font-weight: 600; }
 
 .seer-side-count { margin-left: auto; background: rgba(255,255,255,0.1); border-radius: 20px; font-size: 11px; font-weight: 800; padding: 1px 8px; }
 .seer-side-count:empty { display: none; }
@@ -488,26 +531,58 @@ GM_addStyle(`
 
 .seer-chip.chip-vote { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.4); color: #fbbf24; }
 
-.seer-modal-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
+.seer-modal-tools { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
 .seer-tool-btn {
     background: rgba(255,255,255,0.06); border: 1px solid var(--seer-border); color: #e2e8f0 !important;
-    font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    font-size: 12px; font-weight: 700; padding: 6px 13px; border-radius: 20px; cursor: pointer;
     text-decoration: none !important; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; font-family: inherit;
 }
 .seer-tool-btn.on { background: rgba(245,158,11,0.2); border-color: rgba(245,158,11,0.55); color: #fcd34d !important; }
 .seer-tool-btn:hover { background: rgba(99,102,241,0.3); border-color: var(--seer-accent); color: #fff !important; }
 .seer-tool-btn.trailer { background: linear-gradient(135deg, #ef4444, #f97316); border-color: transparent; color: #fff !important; }
 .seer-tool-btn.trailer:hover { filter: brightness(1.1); }
+.seer-ext-wrap { position: relative; margin-left: auto; }
+.seer-ext-menu {
+    display: none; position: absolute; bottom: calc(100% + 8px); right: 0; min-width: 150px; flex-direction: column; gap: 2px;
+    background: #151f36; border: 1px solid var(--seer-border); border-radius: 12px; padding: 6px; z-index: 40;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.6);
+}
+.seer-ext-menu.open { display: flex; }
+.seer-ext-menu a {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 700;
+    color: #e2e8f0 !important; text-decoration: none !important; white-space: nowrap;
+}
+.seer-ext-menu a:hover { background: var(--seer-accent); color: #fff !important; }
 
-.seer-mediainfo { margin-bottom: 15px; border: 1px solid var(--seer-border); border-radius: 10px; background: rgba(0,0,0,0.25); }
+.seer-mediainfo { margin-bottom: 8px; border: 1px solid var(--seer-border); border-radius: 10px; background: rgba(0,0,0,0.25); }
 .seer-mediainfo summary { cursor: pointer; padding: 10px 14px; font-size: 12.5px; font-weight: 800; color: #e2e8f0; list-style: none; user-select: none; }
 .seer-mediainfo summary::-webkit-details-marker { display: none; }
 .seer-mediainfo summary::before { content: '▸ '; }
 .seer-mediainfo[open] summary::before { content: '▾ '; }
 .seer-mediainfo pre {
-    margin: 0; padding: 0 14px 14px; max-height: 280px; overflow: auto; font-size: 11px; line-height: 1.5;
+    margin: 0; padding: 0 14px 14px; max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.5;
     color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; background: transparent; border: none;
 }
+
+.seer-rel-panel {
+    display: none; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 22px; padding: 18px 22px;
+    background: var(--seer-card); border: 1px solid var(--seer-border); border-radius: 16px;
+}
+.seer-rel-panel.show { display: flex; }
+.seer-rel-back {
+    align-self: flex-start; background: rgba(255,255,255,0.06); border: 1px solid var(--seer-border); color: #e2e8f0;
+    font-size: 12.5px; font-weight: 700; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-family: inherit; transition: 0.2s;
+}
+.seer-rel-back:hover { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff; }
+.seer-rel-avatar {
+    width: 84px; height: 84px; border-radius: 50%; overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 38px; background: linear-gradient(135deg, #312e81, #581c87); border: 2px solid rgba(139,92,246,0.6);
+}
+.seer-rel-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.seer-rel-info { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1 1 260px; }
+.seer-rel-name { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -0.4px; }
+.seer-rel-total { font-size: 13px; color: var(--seer-text-muted); font-weight: 700; }
+.seer-rel-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 
 #seer-trailer-overlay {
     display: none; position: fixed; inset: 0; background: rgba(3,5,9,0.93); z-index: 2147483650;
@@ -538,6 +613,7 @@ GM_addStyle(`
 @media (max-width: 560px) {
     .seer-list.seer-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
     .seer-modal-tools .seer-tool-btn { flex: 1 1 auto; justify-content: center; }
+    .seer-ext-wrap { margin-left: 0; }
 }
 `);
 
@@ -573,6 +649,7 @@ const LIGHT_RULES = `
 .tag-audio{color:#047857;}
 .tag-file{color:#0369a1;}
 .tag-seen{color:#047857;}
+.tag-vers{color:#be185d;}
 .seer-load-btn{background:#fff;border-color:rgba(15,23,42,.15);color:#0f172a;}
 .seer-load-btn:hover{background:var(--seer-accent);border-color:var(--seer-accent);color:#fff;}
 
@@ -603,13 +680,19 @@ const LIGHT_RULES = `
 .seer-detail-window{background:#fff;border-color:rgba(15,23,42,.12);box-shadow:0 30px 80px rgba(15,23,42,.35),0 0 40px rgba(99,102,241,.12);}
 .seer-modal-left{background:#e2e8f0;}
 .seer-detail-window.is-landscape .seer-modal-left::after{background:linear-gradient(180deg,rgba(255,255,255,0) 55%,#fff 100%);}
-.seer-modal-close,.seer-modal-forum{background:rgba(255,255,255,.85);color:#0f172a !important;border-color:rgba(15,23,42,.15);}
+.seer-modal-foot{background:#fff;}
+.seer-modal-close{background:rgba(255,255,255,.85);color:#0f172a !important;border-color:rgba(15,23,42,.15);}
 .seer-modal-close:hover{background:#ef4444;color:#fff !important;}
-.seer-modal-forum:hover{background:var(--seer-accent);color:#fff !important;}
+.seer-meta-pill{background:rgba(15,23,42,.05);color:#1e293b !important;}
+.seer-meta-pill:hover{background:var(--seer-accent);color:#fff !important;}
 .seer-modal-title{color:#0f172a;}
-.seer-specs-matrix,.seer-text-box,.seer-magnet-item{background:rgba(15,23,42,.04);}
-.seer-spec-value,.seer-magnet-label{color:#0f172a;}
+.seer-specs-ribbon,.seer-text-box,.seer-magnet-item{background:rgba(15,23,42,.04);}
+.seer-magnet-label{color:#0f172a;}
+.seer-ver-tab{background:rgba(15,23,42,.05);color:#334155;}
+.seer-ver-tab:hover{color:#0f172a;}
+.seer-ver-tab.active{background:var(--seer-accent);color:#fff;}
 .seer-synopsis-body,.seer-text-box{color:#334155;}
+.seer-syn-toggle{color:#4f46e5;}
 .seer-raw-box{background:rgba(15,23,42,.04);border-color:rgba(15,23,42,.12);color:#64748b;}
 .seer-magnet-copy{color:#4338ca;}
 .seer-magnet-copy:hover,.seer-magnet-copy.copied{color:#fff;}
@@ -621,6 +704,10 @@ const LIGHT_RULES = `
 .seer-facet:hover{color:#0f172a;}
 .seer-facet.active,.seer-facet.active:hover{color:#fff;}
 .seer-facet.reset,.seer-facet.reset:hover{color:#dc2626;}
+.seer-adv{background:rgba(15,23,42,.03);}
+.seer-adv-item{color:#334155;}
+.seer-adv-item b{color:#0f172a;}
+.seer-adv-input{background:rgba(15,23,42,.04);color:#0f172a;}
 .seer-side-count{background:rgba(15,23,42,.08);}
 .seer-side-item.active .seer-side-count{background:rgba(255,255,255,.25);}
 .seer-fav-btn{background:rgba(15,23,42,.05);color:#d97706;}
@@ -631,9 +718,14 @@ const LIGHT_RULES = `
 .seer-tool-btn.on{background:rgba(245,158,11,.2);color:#b45309 !important;}
 .seer-tool-btn:hover{background:var(--seer-accent);color:#fff !important;}
 .seer-tool-btn.trailer,.seer-tool-btn.trailer:hover{background:linear-gradient(135deg,#ef4444,#f97316);color:#fff !important;}
+.seer-ext-menu{background:#fff;box-shadow:0 14px 34px rgba(15,23,42,.25);}
+.seer-ext-menu a{color:#1e293b !important;}
+.seer-ext-menu a:hover{background:var(--seer-accent);color:#fff !important;}
 .seer-mediainfo{background:rgba(15,23,42,.04);}
 .seer-mediainfo summary{color:#1e293b;}
 .seer-mediainfo pre{color:#475569;}
+.seer-rel-back{background:rgba(15,23,42,.05);color:#1e293b;}
+.seer-rel-back:hover{background:var(--seer-accent);color:#fff;}
 .seer-kbd-help kbd{background:rgba(15,23,42,.06);color:#0f172a;}
 `;
 GM_addStyle(LIGHT_RULES.replace(/(^|\})\s*([^{}]+)\{/g, (m, a, sel) =>
@@ -682,7 +774,7 @@ GM_addStyle(`
 .seer-settings-status:empty { min-height: 0; }
 .seer-settings-status.ok { color: #34d399; }
 .seer-settings-status.err { color: #f87171; }
-.seer-settings-actions { display: flex; gap: 10px; margin-top: 2px; }
+.seer-settings-actions { display: flex; gap: 10px; margin-top: 2px; flex-wrap: wrap; }
 .seer-settings-actions .seer-action-btn { margin-top: 0; width: auto; flex: 1; padding: 12px 20px; }
 .seer-settings-actions .seer-load-btn { border-radius: 10px; padding: 12px 18px; }
 
@@ -745,28 +837,28 @@ GM_addStyle(`
 GM_addStyle(`
 .seer-magnet-box.show {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px;
-    padding-top: 10px; border-top: 1px solid var(--seer-border);
+    padding-top: 2px;
 }
 .seer-magnet-box .seer-action-btn {
     padding: 11px 12px; font-size: 13px; gap: 8px; line-height: 1.2; text-align: center;
 }
-.seer-magnet-box #seer-copy-all-btn {
+.seer-magnet-box #seer-send-all-btn {
     background: rgba(99,102,241,0.14); border: 1px solid rgba(99,102,241,0.45);
     color: #c7d2fe; box-shadow: none;
 }
-.seer-magnet-box #seer-copy-all-btn:hover { background: rgba(99,102,241,0.3); box-shadow: none; }
-.seer-magnet-box #seer-copy-all-btn.copied { border-color: transparent; color: #fff; }
-.seer-magnet-box .seer-magnet-list { grid-column: 1 / -1; max-height: 170px; }
+.seer-magnet-box #seer-send-all-btn:hover { background: rgba(99,102,241,0.3); box-shadow: none; }
+.seer-magnet-box #seer-send-all-btn.copied { border-color: transparent; color: #fff; }
+.seer-magnet-box .seer-magnet-list { grid-column: 1 / -1; max-height: 130px; }
 
-#mirseer-app.seer-light .seer-magnet-box #seer-copy-all-btn { color: #4338ca; }
-#mirseer-app.seer-light .seer-magnet-box #seer-copy-all-btn.copied { color: #fff; }
+#mirseer-app.seer-light .seer-magnet-box #seer-send-all-btn { color: #4338ca; }
+#mirseer-app.seer-light .seer-magnet-box #seer-send-all-btn.copied { color: #fff; }
 `);
-const CACHE_PREFIX = 'mirseer_v23_';
+const CACHE_PREFIX = 'mirseer_v24_';
 const FREQ_KEY = CACHE_PREFIX + 'imgfreq';
 const FILM_FORUM_ID = 26;
 const SERIES_FORUM_ID = 28;
 
-const MAX_CONCURRENT = 8;
+const MAX_CONCURRENT = 6;
 const CANCELLED = Symbol('cancelled');
 const THANKS_SELECTOR = 'a[href*="thanks="], a[href*="action=thanks"], a[title*="Grazie"], a[title*="Thanks"], .thanks-icon a';
 const SIDE_HIDE_RE = /\b(richiest|regolament|segnalaz|comunicat|annunc|off[\s._-]*topic|presentaz|cestin|archiv|faq|guid|tutorial|staff|reseed)/i;
@@ -775,7 +867,18 @@ const MAIN_SUB_EXCLUDE_RE = /\b(richiest|regolament|music|audio|concert|ebook|so
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const absHref = a => { try { return new URL(a.getAttribute('href'), location.href).href; } catch (e) { return a.href || ''; } };
+const absUrl = u => { try { return new URL(u, location.href).href; } catch (e) { return u || ''; } };
 const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Pausa minima tra richieste a viewforum/search/profili: evita il flood limit di phpBB
+let nextNetSlot = 0;
+function netGate() {
+    const now = Date.now();
+    const at = Math.max(now, nextNetSlot);
+    nextNetSlot = at + NET_GAP;
+    return at > now ? sleep(at - now) : Promise.resolve();
+}
 
 // Logo MirSeer (occhio stilizzato) in SVG: nitido a qualsiasi dimensione
 const logoSvg = gid => `<svg class="seer-logo" viewBox="0 0 100 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -797,20 +900,328 @@ const fmtViews = n => {
     return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + 'k';
 };
 
+// =====================================================================
+//  NUCLEO "PURO" (nessun accesso al DOM): eseguito sia nel main thread
+//  sia in un Web Worker inline creato da Blob. Una sola sorgente di verita':
+//  il worker riceve il testo di questa stessa funzione (Function.toString).
+// =====================================================================
+function pureCore() {
+    const RANGE_SEP = '(?:[-–—+&,~]|\\s+(?:a|e|to)\\s+)';
+    const SEASON_RES = {
+        ep:       /\bS(\d{1,2})[\s._-]?E(\d{1,3})(?:[\s._-]*(?:-|–|E|~)[\s._-]*E?(\d{1,3}))?\b/i,
+        x:        /\b(\d{1,2})x(\d{2,3})\b/i,
+        rangeS:   /\bS(\d{1,2})\s*[-–—~+&]\s*S(\d{1,2})\b/i,
+        rangeW:   new RegExp('\\b(?:Stagion[ei]|Seasons?)[\\s._]*(\\d{1,2})[\\s._]*' + RANGE_SEP + '[\\s._]*(?:Stagione[\\s._]*|Season[\\s._]*)?(\\d{1,2})\\b', 'i'),
+        oneS:     /\bS(\d{1,2})\b/i,
+        oneW:     /\b(?:Stagione|Season)[\s._]*(\d{1,2})\b/i,
+        ordNum:   /\b(\d{1,2})\s*[ªa°]\s*Stagione\b/i,
+        ordWord:  /\b(prima|seconda|terza|quarta|quinta|sesta|settima|ottava|nona|decima)[\s._]+Stagione\b/i,
+        episode:  /\b(?:Episodi[oe]?|Ep)\.?[\s._]*(\d{1,3})(?:[\s._]*(?:-|–|a)[\s._]*(\d{1,3}))?\b/i,
+        complete: /\b(?:serie[\s._]+completa|complete[\s._]+series|tutte[\s._]+le[\s._]+stagioni|integrale)\b/i
+    };
+    const ORD_WORDS = { prima: 1, seconda: 2, terza: 3, quarta: 4, quinta: 5, sesta: 6, settima: 7, ottava: 8, nona: 9, decima: 10 };
+    const SEASON_STRIP_ORDER = ['ep', 'x', 'rangeS', 'rangeW', 'ordNum', 'ordWord', 'oneW', 'oneS', 'episode', 'complete'];
+
+    function stripSeasonText(s) {
+        return SEASON_STRIP_ORDER.reduce((acc, key) => acc.replace(new RegExp(SEASON_RES[key].source, 'gi'), ' '), s);
+    }
+
+    function parseSeasonInfo(raw) {
+        const n = v => parseInt(v, 10);
+        const pad = v => String(n(v)).padStart(2, '0');
+        const epLabel = (a, b) => (b && n(b) !== n(a)) ? `Ep. ${n(a)}-${n(b)}` : `Ep. ${n(a)}`;
+        let m;
+
+        if ((m = raw.match(SEASON_RES.ep)) || (m = raw.match(SEASON_RES.x))) {
+            const s = n(m[1]);
+            return {
+                kind: 'ep', season: s,
+                label: `Stagione ${s} · ${epLabel(m[2], m[3])}`,
+                short: `S${pad(s)}E${pad(m[2])}${m[3] && n(m[3]) !== n(m[2]) ? '-' + pad(m[3]) : ''}`
+            };
+        }
+        if ((m = raw.match(SEASON_RES.rangeS)) || (m = raw.match(SEASON_RES.rangeW))) {
+            const a = n(m[1]), b = n(m[2]);
+            if (b > a) return { kind: 'range', season: a, label: `Stagioni ${a}-${b}`, short: `S${pad(a)}-${pad(b)}` };
+        }
+
+        let season = null;
+        if ((m = raw.match(SEASON_RES.oneS))) season = n(m[1]);
+        else if ((m = raw.match(SEASON_RES.oneW))) season = n(m[1]);
+        else if ((m = raw.match(SEASON_RES.ordNum))) season = n(m[1]);
+        else if ((m = raw.match(SEASON_RES.ordWord))) season = ORD_WORDS[m[1].toLowerCase()];
+
+        if (season !== null && !isNaN(season)) {
+            let label = `Stagione ${season}`;
+            const e = raw.match(SEASON_RES.episode);
+            if (e) label += ` · ${epLabel(e[1], e[2])}`;
+            else if (/\bcomplet[ae]\b/i.test(raw)) label += ' · Completa';
+            else if (/\bin[\s._]*corso\b/i.test(raw)) label += ' · In corso';
+            return { kind: 'season', season, label, short: `S${pad(season)}${e ? 'E' + pad(e[1]) : ''}` };
+        }
+        if (SEASON_RES.complete.test(raw)) return { kind: 'complete', season: null, label: 'Serie completa', short: 'COMPLETA' };
+
+        const e = raw.match(SEASON_RES.episode);
+        if (e) return { kind: 'episode', season: null, label: epLabel(e[1], e[2]), short: `EP${pad(e[1])}` };
+        return null;
+    }
+
+    function parseReleaseInfo(rawTitle) {
+        const raw = rawTitle.trim();
+
+        const is4k = /\b(4k|2160p|uhd)\b/i.test(raw);
+        const is1080p = /\b(1080p|1080i|fhd)\b/i.test(raw);
+        const is720p = /\b720p\b/i.test(raw) || (!is4k && !is1080p && /\bhd\b/i.test(raw));
+        const isH265 = /\b(x265|hevc|h\.?265)\b/i.test(raw);
+        const isH264 = /\b(x264|avc|h\.?264)\b/i.test(raw);
+        const isAv1 = /\b(av1)\b/i.test(raw);
+        const is10bit = /\b(10bit|10-bit)\b/i.test(raw);
+
+        const isDV = /\b(dv|dolby\s*vision)\b/i.test(raw);
+        const isHDR10Plus = /\b(hdr10\+|hdr10plus)\b/i.test(raw);
+        const isHDR = /\b(hdr|hdr10)\b/i.test(raw) || isHDR10Plus;
+
+        let source = 'Rip';
+        if (/\bremux\b/i.test(raw)) source = 'Remux';
+        else if (/\b(uhd[\s.-]*bluray|ultra[\s.-]*hd[\s.-]*bluray)\b/i.test(raw)) source = 'UHD BluRay';
+        else if (/\b(bluray|bdrip|brrip)\b/i.test(raw)) source = 'BluRay';
+        else if (/\b(web-dl|webdl|webrip|hmax|nf|amzn|dsnp|atvp)\b/i.test(raw)) source = 'WEB-DL';
+        else if (/\b(hdtv|tvrip|satrip|dvb)\b/i.test(raw)) source = 'HDTV';
+        else if (/\b(dvdrip|dvd)\b/i.test(raw)) source = 'DVDRip';
+
+        const audioLangs = [];
+        if (/\b(ita|italian|italiano)\b/i.test(raw)) audioLangs.push('ITA');
+        if (/\b(eng|english|inglese)\b/i.test(raw)) audioLangs.push('ENG');
+        if (/\b(jap|japanese|giapponese)\b/i.test(raw)) audioLangs.push('JAP');
+        if (/\b(fra|fre|french|francese)\b/i.test(raw)) audioLangs.push('FRA');
+        if (/\b(spa|spanish|spagnolo)\b/i.test(raw)) audioLangs.push('SPA');
+        if (/\b(ger|german|tedesco)\b/i.test(raw)) audioLangs.push('GER');
+        if (/\b(multi|multiaudio|dual|dual[\s.-]*audio)\b/i.test(raw) && audioLangs.length === 0) audioLangs.push('MULTI');
+
+        let audioCodec = '';
+        if (/\b(atmos|dolby[\s.-]*atmos)\b/i.test(raw)) audioCodec = 'Atmos';
+        else if (/\b(truehd|true-hd)\b/i.test(raw)) audioCodec = 'TrueHD';
+        else if (/\b(dts-hd[\s.-]*ma|dts-ma)\b/i.test(raw)) audioCodec = 'DTS-HD MA';
+        else if (/\b(dts-hd)\b/i.test(raw)) audioCodec = 'DTS-HD';
+        else if (/\b(dts)\b/i.test(raw)) audioCodec = 'DTS';
+        else if (/\b(ddp|dd\+|e-?ac3|eac3)\b/i.test(raw)) audioCodec = 'E-AC3';
+        else if (/\b(ac3|dd5\.1|dd2\.0|dolby[\s.-]*digital)\b/i.test(raw)) audioCodec = 'AC3';
+        else if (/\b(aac|aac2\.0)\b/i.test(raw)) audioCodec = 'AAC';
+        else if (/\b(flac)\b/i.test(raw)) audioCodec = 'FLAC';
+
+        let channels = '';
+        if (/\b(7\.1)\b/.test(raw)) channels = '7.1';
+        else if (/\b(5\.1)\b/.test(raw)) channels = '5.1';
+        else if (/\b(2\.0)\b/.test(raw)) channels = '2.0';
+
+        const audioFormatted = audioLangs.length > 0
+            ? `${audioLangs.join('/')}${audioCodec ? ' (' + audioCodec + (channels ? ' ' + channels : '') + ')' : ''}`
+            : (audioCodec ? `${audioCodec} ${channels}`.trim() : 'ITA');
+
+        const subLangs = [];
+        const hasSubIta = /\b(sub[\s._-]*ita|subita|ita[\s._-]*sub)\b/i.test(raw);
+        const hasSubEng = /\b(sub[\s._-]*eng|subeng|eng[\s._-]*sub)\b/i.test(raw);
+        const hasMultiSub = /\b(multisub|multi[\s._-]*sub|sub[\s._-]*multi)\b/i.test(raw);
+        const hasForced = /\b(forced|forzati|sub[\s._-]*forced)\b/i.test(raw);
+        if (hasSubIta) subLangs.push('ITA');
+        if (hasSubEng) subLangs.push('ENG');
+        if (hasMultiSub) subLangs.push('Multi');
+        if (hasForced) subLangs.push('Forzati');
+
+        const subsFormatted = subLangs.length > 0
+            ? subLangs.join(' + ')
+            : (/\b(softsub|hardsub|subbed)\b/i.test(raw) ? 'Inclusi' : 'Non specificati');
+
+        const season = parseSeasonInfo(raw);
+        const isTvSeries = (!!season && season.kind !== 'episode') || /\bserie[\s._]*tv\b|\bepisod/i.test(raw);
+        const yearMatch = raw.match(/\b(19\d\d|20\d\d)\b/);
+        const year = yearMatch ? yearMatch[1] : '';
+
+        let clean = raw.replace(/^\[[^\]]+\]/g, '').replace(/\[.*?\]|\(.*?\)/g, '');
+        clean = stripSeasonText(clean)
+            .replace(/-MirCrew|-SpyRo|-NovaRip|-TNTVillage|\bMirCrew\b/gi, '')
+            .replace(/\b(stagion[ei]|seasons?|completa|complete|pack|in\s*corso|integrale|episodi[oe]?)\b/gi, ' ')
+            .replace(/\b(2160p|4k|1080p|1080i|720p|576p|480p|uhd|fhd|hd)\b/gi, '')
+            .replace(/\b(remux|uhd[\s.-]*bluray|bluray|bdrip|brrip|web-dl|webdl|webrip|hdtv|dvdrip|dvd)\b/gi, '')
+            .replace(/\b(x265|x264|hevc|avc|av1|h\.?264|h\.?265|10bit|10-bit)\b/gi, '')
+            .replace(/\b(xvid|divx|sd|pdtv|dsr|hdrip|tvrip|satrip|dvbrip|pir8)\b/gi, '')
+            .replace(/\b(hdr10\+|hdr10|hdr|dolby[\s.-]*vision|dv|sdr)\b/gi, '')
+            .replace(/\b(dts-hd[\s.-]*ma|dts-hd|dts|truehd|atmos|ddp|eac3|ac3|aac|flac|mp3|5\.1|7\.1|2\.0)\b/gi, '')
+            .replace(/\b(sub[\s._-]*(?:ita|eng|multi|forced)|subita|subeng|multisub|softsub|hardsub)\b/gi, '')
+            .replace(/\b(ita|eng|italian|english|japanese|jap|fra|spa|ger|multi|dual)\b/gi, '')
+            .replace(/[.\-_]+/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+
+        const baseTitle = clean || raw;
+        const displayTitle = (isTvSeries && season) ? `${baseTitle} – ${season.label}` : baseTitle;
+
+        return {
+            cleanTitle: baseTitle, displayTitle, season, isTvSeries,
+            is4k, is1080p, is720p, isH265, isH264, isAv1, is10bit, isHDR, isDV,
+            source, audioFormatted, subsFormatted, audioLangs, subLangs,
+            audioCodec: audioCodec || 'Standard', year
+        };
+    }
+
+    const letterCount = s => (String(s).match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+    function isRealProse(s) {
+        if (!s) return false;
+        const t = String(s).trim();
+        const letters = letterCount(t);
+        return letters >= 38 && letters / t.length >= 0.6;
+    }
+
+    function stripDividers(text) {
+        return text
+            .split('\n')
+            .filter(l => !(l.trim().length >= 3 && !/[A-Za-z0-9À-ÿ]/.test(l)))
+            .join('\n')
+            .replace(/[-=~_*#]{4,}/g, ' ')
+            .replace(/[ \t]{2,}/g, ' ')
+            .replace(/\n{3,}/g, '\n\n');
+    }
+
+    const SYN_HEAD = '(?:Trama|Sinossi|Plot|Storyline|Overview|Descrizione)';
+    const SYN_STOP = '(?:Scheda\\s*Tecnica|Dati\\s*Tecnici|Info\\s*Release|Cast|Screenshots?|Audio\\s*:|Video\\s*:|Regia|Genere|Durata|Formato|Lingua|Sottotitoli|Download|Magnet|Dimensione|Qualit[aà]|Release|Specifiche|Tracklist|Mediainfo|General|Titolo)';
+    const SYN_RE = new RegExp('(?:^|\\n)\\s*[^\\w\\n]{0,4}' + SYN_HEAD + '\\b\\s*(?:del\\s+film|della\\s+serie)?\\s*[:\\-–]?\\s*([\\s\\S]+?)(?=\\n\\s*' + SYN_STOP + '\\b|$)', 'i');
+    const SPEC_START_RE = /^(scheda|dati|risoluzione|formato|lingua|grazie|dimensione|anno|audio|video|general|titolo|qualit|sottotit|durata|genere|regia|cast|release|source|magnet|screenshot|nazione|paese|codec)/i;
+
+    function extractSynopsis(fullText) {
+        const text = stripDividers(fullText || '');
+        const m = text.match(SYN_RE);
+        if (m) {
+            const paras = m[1].split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+            let acc = '';
+            for (const p of paras) {
+                acc += (acc ? ' ' : '') + p;
+                if (letterCount(acc) >= 40) break;
+            }
+            if (isRealProse(acc)) return acc.slice(0, 900);
+        }
+        const paragraphs = text.split(/\n\s*\n/).map(t => t.replace(/\s+/g, ' ').trim()).filter(t =>
+            isRealProse(t) && !SPEC_START_RE.test(t) && (t.match(/:/g) || []).length < 4 && !/(?:Format|Bitrate|Bit rate|Codec)\s*:/i.test(t));
+        return paragraphs.length ? paragraphs[0].slice(0, 900) : null;
+    }
+
+    // ---- Campi della scheda nel post (TITOLO ORIGINALE / ANNO / GENERE / PAESE) ----
+    const FIELD_RES = {
+        orig:    /TITOLO\s*ORIGINALE\s*:\s*([^\n]+)/i,
+        year:    /\bANNO\s*:\s*((?:19|20)\d{2})/i,
+        genre:   /\bGENERE\s*:\s*([^\n]+)/i,
+        country: /\b(?:PAESE|NAZIONE)\s*:\s*([^\n]+)/i
+    };
+    function parsePostFields(text) {
+        const t = text || '';
+        const g = re => { const m = t.match(re); return m ? m[1].trim() : null; };
+        const orig = g(FIELD_RES.orig);
+        return {
+            origTitle: orig ? orig.replace(/[\[(].*?[\])]/g, '').trim().slice(0, 120) || null : null,
+            fieldYear: g(FIELD_RES.year),
+            genre: (g(FIELD_RES.genre) || '').slice(0, 80) || null,
+            country: (g(FIELD_RES.country) || '').slice(0, 80) || null
+        };
+    }
+
+    // ---- MediaInfo ----
+    const MEDIAINFO_MARKERS = [/Complete name/i, /Format\s*(?:profile|\/Info|settings)?\s*:/i, /Bit ?rate/i, /Duration/i, /Frame rate/i, /Codec ID/i, /Channel\(s\)/i, /\bWidth\s*:/i, /\bLanguage\s*:/i, /Unique ID/i, /File size/i];
+    const looksLikeMediaInfo = t => !!t && MEDIAINFO_MARKERS.reduce((n, re) => n + (re.test(t) ? 1 : 0), 0) >= 3;
+
+    function extractMediaInfoText(t) {
+        t = t || '';
+        if (/Complete name\s*:/i.test(t)) {
+            const gi = t.search(/(?:^|\n)\s*(?:General|Generale)\s*\n/i);
+            const start = gi >= 0 ? gi : Math.max(0, t.search(/Complete name\s*:/i) - 40);
+            return t.slice(start, start + 10000).trim() || null;
+        }
+        return null;
+    }
+
+    // Tutto il parsing testuale di un post in un colpo solo (un solo messaggio al worker)
+    function processPost(text) {
+        const t = text || '';
+        return {
+            fields: parsePostFields(t),
+            synopsis: extractSynopsis(t),
+            body: stripDividers(t).slice(0, 4000) || null,
+            miText: extractMediaInfoText(t)
+        };
+    }
+
+    return {
+        SEASON_RES, parseSeasonInfo, stripSeasonText, parseReleaseInfo,
+        letterCount, isRealProse, stripDividers, extractSynopsis, parsePostFields,
+        looksLikeMediaInfo, extractMediaInfoText, processPost
+    };
+}
+
+const pure = pureCore();
+const { SEASON_RES, parseSeasonInfo, isRealProse, stripDividers, looksLikeMediaInfo } = pure;
+
+// ---- Web Worker inline (Blob + URL.createObjectURL) con fallback sincrono ----
+const WORKER_BODY = 'self.onmessage=function(e){var d=e.data,r;try{if(d.op==="titles")r=d.payload.map(function(t){return core.parseReleaseInfo(t);});else if(d.op==="post")r=core.processPost(d.payload);}catch(err){self.postMessage({id:d.id,error:String(err)});return;}self.postMessage({id:d.id,result:r});};';
+let worker = null, workerOff = false, wSeq = 0;
+const wPending = new Map();
+
+function pureSync(op, payload) {
+    return op === 'titles' ? payload.map(t => pure.parseReleaseInfo(t)) : pure.processPost(payload);
+}
+
+function getWorker() {
+    if (worker || workerOff) return worker;
+    try {
+        const src = '(function(){var core=(' + pureCore.toString() + ')();' + WORKER_BODY + '})();';
+        const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+        worker = new Worker(url);
+        worker.onmessage = e => {
+            const p = wPending.get(e.data.id);
+            if (!p) return;
+            wPending.delete(e.data.id);
+            clearTimeout(p.t);
+            if (e.data.error) p.fallback(); else p.resolve(e.data.result);
+        };
+        worker.onerror = () => {
+            workerOff = true;
+            try { worker.terminate(); } catch (e) {}
+            worker = null;
+            wPending.forEach(p => { clearTimeout(p.t); p.fallback(); });
+            wPending.clear();
+        };
+    } catch (e) { workerOff = true; worker = null; }
+    return worker;
+}
+
+function workerCall(op, payload) {
+    const w = getWorker();
+    if (!w) return Promise.resolve(pureSync(op, payload));
+    return new Promise(resolve => {
+        const id = ++wSeq;
+        const fallback = () => resolve(pureSync(op, payload));
+        const t = setTimeout(() => { wPending.delete(id); fallback(); }, 5000);
+        wPending.set(id, { resolve, fallback, t });
+        try { w.postMessage({ id, op, payload }); }
+        catch (e) { wPending.delete(id); clearTimeout(t); fallback(); }
+    });
+}
+
 const sectionList = SECTIONS.map(s => ({ ...s }));
 const forumToSection = new Map([[String(FILM_FORUM_ID), 'Film'], [String(SERIES_FORUM_ID), 'Serie TV']]);
 const registry = new Map();
 const main = { items: [], group: null, loaded: false, exhausted: false };
 const sections = new Map();
 let view = { key: 'home', section: null };
-let search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null };
+let search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
+let rel = null;                       // stato della vista "Releaser"
 let sortMode = 'recent';
 let viewToken = 0, searchToken = 0, modalToken = 0;
 let currentTopicUrl = null;
 let currentModalItem = null;
+let modalVersions = [];
 let posterObserver = null;
 let sidebarLoaded = false, sidebarReady = false;
 let lastBaseCount = 0;
+let lastBase = [];
+let advOpen = false;
 
 const iconFor = name => { const s = sectionList.find(x => x.name === name); return s ? s.ico : '📁'; };
 const typeIcon = item => iconFor(item.type);
@@ -951,17 +1362,20 @@ const getTmdbKey = () => String(getPref('tmdb_api_key', '') || '').trim();
 const setTmdbKey = k => setPref('tmdb_api_key', String(k || '').trim());
 
 const HERO_SPEEDS = [5000, 10000, 0];
+const SORT_MODES = ['recent', 'activity', 'views', 'title', 'replies'];
 const settings = {
     heroEnabled: !!getPref('heroEnabled', true),
     heroSpeed: (v => (HERO_SPEEDS.includes(v) ? v : 5000))(Number(getPref('heroSpeed', 5000))),
     startView: String(getPref('startView', 'home')),
     magnetAction: getPref('magnetAction', 'copy') === 'open' ? 'open' : 'copy'
 };
+sortMode = (v => (SORT_MODES.includes(v) ? v : 'recent'))(getPref('sortMode', 'recent'));
 
 // ---- Vista (lista / griglia), filtri rapidi, "scaricati" e preferiti ----
 let viewMode = getPref('viewMode', 'list') === 'grid' ? 'grid' : 'list';
 let hideSeen = !!getPref('hideSeen', false);
-const filters = { q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all' };
+const newFilters = () => ({ q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all' });
+const filters = newFilters();
 
 let seenSet = new Set((() => { const a = getPref('seen', []); return Array.isArray(a) ? a : []; })().map(String));
 let favs = (() => { const f = getPref('favs', {}); return (f && typeof f === 'object' && !Array.isArray(f)) ? f : {}; })();
@@ -997,6 +1411,7 @@ function resetMetadataCache() {
     savePending.clear();
     resolvedMem.clear();
     registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; });
+    ratingTried.clear();
     heroNext = null;
 }
 
@@ -1009,6 +1424,7 @@ function clearAllCache() {
     savePending.clear();
     resolvedMem.clear();
     warmed.clear();
+    ratingTried.clear();
     registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; });
     heroNext = null;
 }
@@ -1120,6 +1536,7 @@ const isRepeatedImage = src => (imgFreq[src] || []).length >= REPEAT_THRESHOLD;
 
 const resolvedMem = new Map();
 const savePending = new Map();
+const ratingTried = new Set();
 let saveTimer = null;
 
 const snapshot = it => ({
@@ -1132,6 +1549,7 @@ const snapshot = it => ({
     tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null,
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
+    author: it.author || '', authorId: it.authorId || null, authorAvatar: it.authorAvatar || null,
     body: it.kind === 'text' ? (it.body || '').slice(0, 4000) : null
 });
 
@@ -1153,6 +1571,7 @@ window.addEventListener('pagehide', () => {
     flushSaves();
     if (freqTimer) { clearTimeout(freqTimer); persistFreq(); }
     flushIdb();
+    try { if (worker) worker.terminate(); } catch (e) {}
 });
 
 function readCache(id) {
@@ -1183,66 +1602,6 @@ function warmImage(url) {
     i.src = url;
 }
 
-const RANGE_SEP = '(?:[-–—+&,~]|\\s+(?:a|e|to)\\s+)';
-const SEASON_RES = {
-    ep:       /\bS(\d{1,2})[\s._-]?E(\d{1,3})(?:[\s._-]*(?:-|–|E|~)[\s._-]*E?(\d{1,3}))?\b/i,
-    x:        /\b(\d{1,2})x(\d{2,3})\b/i,
-    rangeS:   /\bS(\d{1,2})\s*[-–—~+&]\s*S(\d{1,2})\b/i,
-    rangeW:   new RegExp('\\b(?:Stagion[ei]|Seasons?)[\\s._]*(\\d{1,2})[\\s._]*' + RANGE_SEP + '[\\s._]*(?:Stagione[\\s._]*|Season[\\s._]*)?(\\d{1,2})\\b', 'i'),
-    oneS:     /\bS(\d{1,2})\b/i,
-    oneW:     /\b(?:Stagione|Season)[\s._]*(\d{1,2})\b/i,
-    ordNum:   /\b(\d{1,2})\s*[ªa°]\s*Stagione\b/i,
-    ordWord:  /\b(prima|seconda|terza|quarta|quinta|sesta|settima|ottava|nona|decima)[\s._]+Stagione\b/i,
-    episode:  /\b(?:Episodi[oe]?|Ep)\.?[\s._]*(\d{1,3})(?:[\s._]*(?:-|–|a)[\s._]*(\d{1,3}))?\b/i,
-    complete: /\b(?:serie[\s._]+completa|complete[\s._]+series|tutte[\s._]+le[\s._]+stagioni|integrale)\b/i
-};
-const ORD_WORDS = { prima: 1, seconda: 2, terza: 3, quarta: 4, quinta: 5, sesta: 6, settima: 7, ottava: 8, nona: 9, decima: 10 };
-const SEASON_STRIP_ORDER = ['ep', 'x', 'rangeS', 'rangeW', 'ordNum', 'ordWord', 'oneW', 'oneS', 'episode', 'complete'];
-
-function stripSeasonText(s) {
-    return SEASON_STRIP_ORDER.reduce((acc, key) => acc.replace(new RegExp(SEASON_RES[key].source, 'gi'), ' '), s);
-}
-
-function parseSeasonInfo(raw) {
-    const n = v => parseInt(v, 10);
-    const pad = v => String(n(v)).padStart(2, '0');
-    const epLabel = (a, b) => (b && n(b) !== n(a)) ? `Ep. ${n(a)}-${n(b)}` : `Ep. ${n(a)}`;
-    let m;
-
-    if ((m = raw.match(SEASON_RES.ep)) || (m = raw.match(SEASON_RES.x))) {
-        const s = n(m[1]);
-        return {
-            kind: 'ep', season: s,
-            label: `Stagione ${s} · ${epLabel(m[2], m[3])}`,
-            short: `S${pad(s)}E${pad(m[2])}${m[3] && n(m[3]) !== n(m[2]) ? '-' + pad(m[3]) : ''}`
-        };
-    }
-    if ((m = raw.match(SEASON_RES.rangeS)) || (m = raw.match(SEASON_RES.rangeW))) {
-        const a = n(m[1]), b = n(m[2]);
-        if (b > a) return { kind: 'range', season: a, label: `Stagioni ${a}-${b}`, short: `S${pad(a)}-${pad(b)}` };
-    }
-
-    let season = null;
-    if ((m = raw.match(SEASON_RES.oneS))) season = n(m[1]);
-    else if ((m = raw.match(SEASON_RES.oneW))) season = n(m[1]);
-    else if ((m = raw.match(SEASON_RES.ordNum))) season = n(m[1]);
-    else if ((m = raw.match(SEASON_RES.ordWord))) season = ORD_WORDS[m[1].toLowerCase()];
-
-    if (season !== null && !isNaN(season)) {
-        let label = `Stagione ${season}`;
-        const e = raw.match(SEASON_RES.episode);
-        if (e) label += ` · ${epLabel(e[1], e[2])}`;
-        else if (/\bcomplet[ae]\b/i.test(raw)) label += ' · Completa';
-        else if (/\bin[\s._]*corso\b/i.test(raw)) label += ' · In corso';
-        return { kind: 'season', season, label, short: `S${pad(season)}${e ? 'E' + pad(e[1]) : ''}` };
-    }
-    if (SEASON_RES.complete.test(raw)) return { kind: 'complete', season: null, label: 'Serie completa', short: 'COMPLETA' };
-
-    const e = raw.match(SEASON_RES.episode);
-    if (e) return { kind: 'episode', season: null, label: epLabel(e[1], e[2]), short: `EP${pad(e[1])}` };
-    return null;
-}
-
 function parseEpisodeRef(text) {
     if (!text) return null;
     const n = v => parseInt(v, 10);
@@ -1265,7 +1624,6 @@ function magnetLabel(ref, idx) {
     if (ref && ref.season != null) return `Stagione ${ref.season}`;
     return `Magnet ${idx + 1}`;
 }
-
 const NON_MOVIE_SERIES_RE = /\b(concerto|concerti|live\s+(?:at|in|from|on|tour|show)|world\s*tour|unplugged|videoclip|videomusic|festival\s*di\s*sanremo|sanremo\s*\d{4}|eurovision|festivalbar|arena\s*di\s*verona|wwe|smackdown|wrestling|aew|nxt|motogp|moto[\s._-]?gp|moto[23]|formula[\s._-]*1|f1[\s._-]*20\d\d|serie\s*a|champions\s*league|europa\s*league|conference\s*league|partita|calcio|mondiali|olimpiadi|superbowl|nba|ufc|mma|pugilato|gran[\s._-]*premio|gp[\s._-]*di|talk[\s._-]*show|reality[\s._-]*show|reality|telegiornale|tg[1-5]|tgcom|striscia\s*la\s*notizia|le\s*iene|masterchef|pechino\s*express|grande\s*fratello|isola\s*dei\s*famosi|amici\s*di\s*maria|uomini\s*e\s*donne|c['’]e\s*posta\s*per\s*te|ballando\s*con\s*le\s*stelle|affari\s*tuoi|reazione\s*a\s*catena|avanti\s*un\s*altro|soliti\s*ignoti|propaganda\s*live|report|presa\s*diretta|presadiretta|dimartedi|di\s*martedi|piazzapulita|quarta\s*repubblica|dritto\s*e\s*rovescio|fuori\s*dal\s*coro|cartabianca|otto\s*e\s*mezzo|domenica\s*in|verissimo|pomeriggio\s*5|la\s*vita\s*in\s*diretta|disco[\s._-]*grafia|discografia|audiobook|audiolibro|audiolibri|greatest\s*hits|the\s*best\s*of|compilation|album\s*\d{4})\b/i;
 const NON_MOVIE_TAGS = /\[\s*(musica|music|concert[oi]|sport|show|programmi|software|giochi|ebook|audio|flac|mp3|edicola|fumetti|giornali|riviste)\s*\]/i;
 const VIDEO_EVIDENCE_RE = /\b(2160p|1080p|1080i|720p|576p|480p|4k|uhd|bdrip|brrip|bdmux|dvdrip|dvdmux|hdrip|web-?dl|webrip|webmux|web-?mux|blu-?ray|hdtv|tvrip|satrip|dvbrip|remux|x26[45]|hevc|h\.?26[45]|avc|xvid|divx|mkv|mp4|avi)\b/i;
@@ -1302,30 +1660,18 @@ function extractText(root) {
     return c.textContent.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// ---- Estrazione del blocco MediaInfo ([spoiler] / [code]) dal post ----
-const MEDIAINFO_MARKERS = [/Complete name/i, /Format\s*(?:profile|\/Info|settings)?\s*:/i, /Bit ?rate/i, /Duration/i, /Frame rate/i, /Codec ID/i, /Channel\(s\)/i, /\bWidth\s*:/i, /\bLanguage\s*:/i, /Unique ID/i, /File size/i];
-const looksLikeMediaInfo = t => t && MEDIAINFO_MARKERS.reduce((n, re) => n + (re.test(t) ? 1 : 0), 0) >= 3;
-
-function extractMediaInfo(root, fullText) {
-    if (root) {
-        const cands = [...root.querySelectorAll('dl.codebox code, dl.codebox, pre, code, .codebox, .spoiler, .spoilertext, .spoiler-content, .spoiler_content, [class*="spoiler"], [class*="codecontent"]')];
-        const passing = cands.map(el => ({ el, text: extractText(el) })).filter(x => x.text.length > 80 && looksLikeMediaInfo(x.text));
-        const inner = passing.filter(x => !passing.some(o => o !== x && x.el.contains(o.el)));
-        if (inner.length) {
-            const seen = new Set();
-            const parts = [];
-            inner.forEach(x => { if (!seen.has(x.text)) { seen.add(x.text); parts.push(x.text); } });
-            const txt = parts.join('\n\n────────────────────\n\n');
-            if (txt) return txt.slice(0, 14000);
-        }
-    }
-    const t = fullText || '';
-    if (/Complete name\s*:/i.test(t)) {
-        const gi = t.search(/(?:^|\n)\s*(?:General|Generale)\s*\n/i);
-        const start = gi >= 0 ? gi : Math.max(0, t.search(/Complete name\s*:/i) - 40);
-        return t.slice(start, start + 10000).trim() || null;
-    }
-    return null;
+// ---- Estrazione del blocco MediaInfo ([spoiler] / [code]) dal DOM del post (la parte testuale vive nel nucleo/worker) ----
+function extractMediaInfoDom(root) {
+    if (!root) return null;
+    const cands = [...root.querySelectorAll('dl.codebox code, dl.codebox, pre, code, .codebox, .spoiler, .spoilertext, .spoiler-content, .spoiler_content, [class*="spoiler"], [class*="codecontent"]')];
+    const passing = cands.map(el => ({ el, text: extractText(el) })).filter(x => x.text.length > 80 && looksLikeMediaInfo(x.text));
+    const inner = passing.filter(x => !passing.some(o => o !== x && x.el.contains(o.el)));
+    if (!inner.length) return null;
+    const seen = new Set();
+    const parts = [];
+    inner.forEach(x => { if (!seen.has(x.text)) { seen.add(x.text); parts.push(x.text); } });
+    const txt = parts.join('\n\n────────────────────\n\n');
+    return txt ? txt.slice(0, 14000) : null;
 }
 
 const sectionKindOf = type => VIDEO_TYPES.has(type) ? 'video' : AUDIO_TYPES.has(type) ? 'audio' : FILE_TYPES.has(type) ? 'file' : null;
@@ -1364,104 +1710,6 @@ function detectKind(root, text, magnets, item, hasThanks) {
     return 'text';
 }
 
-function parseReleaseInfo(rawTitle) {
-    const raw = rawTitle.trim();
-
-    const is4k = /\b(4k|2160p|uhd)\b/i.test(raw);
-    const is1080p = /\b(1080p|1080i|fhd)\b/i.test(raw);
-    const is720p = /\b720p\b/i.test(raw) || (!is4k && !is1080p && /\bhd\b/i.test(raw));
-    const isH265 = /\b(x265|hevc|h\.?265)\b/i.test(raw);
-    const isH264 = /\b(x264|avc|h\.?264)\b/i.test(raw);
-    const isAv1 = /\b(av1)\b/i.test(raw);
-    const is10bit = /\b(10bit|10-bit)\b/i.test(raw);
-
-    const isDV = /\b(dv|dolby\s*vision)\b/i.test(raw);
-    const isHDR10Plus = /\b(hdr10\+|hdr10plus)\b/i.test(raw);
-    const isHDR = /\b(hdr|hdr10)\b/i.test(raw) || isHDR10Plus;
-
-    let source = 'Rip';
-    if (/\bremux\b/i.test(raw)) source = 'Remux';
-    else if (/\b(uhd[\s.-]*bluray|ultra[\s.-]*hd[\s.-]*bluray)\b/i.test(raw)) source = 'UHD BluRay';
-    else if (/\b(bluray|bdrip|brrip)\b/i.test(raw)) source = 'BluRay';
-    else if (/\b(web-dl|webdl|webrip|hmax|nf|amzn|dsnp|atvp)\b/i.test(raw)) source = 'WEB-DL';
-    else if (/\b(hdtv|tvrip|satrip|dvb)\b/i.test(raw)) source = 'HDTV';
-    else if (/\b(dvdrip|dvd)\b/i.test(raw)) source = 'DVDRip';
-
-    const audioLangs = [];
-    if (/\b(ita|italian|italiano)\b/i.test(raw)) audioLangs.push('ITA');
-    if (/\b(eng|english|inglese)\b/i.test(raw)) audioLangs.push('ENG');
-    if (/\b(jap|japanese|giapponese)\b/i.test(raw)) audioLangs.push('JAP');
-    if (/\b(fra|fre|french|francese)\b/i.test(raw)) audioLangs.push('FRA');
-    if (/\b(spa|spanish|spagnolo)\b/i.test(raw)) audioLangs.push('SPA');
-    if (/\b(ger|german|tedesco)\b/i.test(raw)) audioLangs.push('GER');
-    if (/\b(multi|multiaudio|dual|dual[\s.-]*audio)\b/i.test(raw) && audioLangs.length === 0) audioLangs.push('MULTI');
-
-    let audioCodec = '';
-    if (/\b(atmos|dolby[\s.-]*atmos)\b/i.test(raw)) audioCodec = 'Atmos';
-    else if (/\b(truehd|true-hd)\b/i.test(raw)) audioCodec = 'TrueHD';
-    else if (/\b(dts-hd[\s.-]*ma|dts-ma)\b/i.test(raw)) audioCodec = 'DTS-HD MA';
-    else if (/\b(dts-hd)\b/i.test(raw)) audioCodec = 'DTS-HD';
-    else if (/\b(dts)\b/i.test(raw)) audioCodec = 'DTS';
-    else if (/\b(ddp|dd\+|e-?ac3|eac3)\b/i.test(raw)) audioCodec = 'E-AC3';
-    else if (/\b(ac3|dd5\.1|dd2\.0|dolby[\s.-]*digital)\b/i.test(raw)) audioCodec = 'AC3';
-    else if (/\b(aac|aac2\.0)\b/i.test(raw)) audioCodec = 'AAC';
-    else if (/\b(flac)\b/i.test(raw)) audioCodec = 'FLAC';
-
-    let channels = '';
-    if (/\b(7\.1)\b/.test(raw)) channels = '7.1';
-    else if (/\b(5\.1)\b/.test(raw)) channels = '5.1';
-    else if (/\b(2\.0)\b/.test(raw)) channels = '2.0';
-
-    const audioFormatted = audioLangs.length > 0
-        ? `${audioLangs.join('/')}${audioCodec ? ' (' + audioCodec + (channels ? ' ' + channels : '') + ')' : ''}`
-        : (audioCodec ? `${audioCodec} ${channels}`.trim() : 'ITA');
-
-    const subLangs = [];
-    const hasSubIta = /\b(sub[\s._-]*ita|subita|ita[\s._-]*sub)\b/i.test(raw);
-    const hasSubEng = /\b(sub[\s._-]*eng|subeng|eng[\s._-]*sub)\b/i.test(raw);
-    const hasMultiSub = /\b(multisub|multi[\s._-]*sub|sub[\s._-]*multi)\b/i.test(raw);
-    const hasForced = /\b(forced|forzati|sub[\s._-]*forced)\b/i.test(raw);
-    if (hasSubIta) subLangs.push('ITA');
-    if (hasSubEng) subLangs.push('ENG');
-    if (hasMultiSub) subLangs.push('Multi');
-    if (hasForced) subLangs.push('Forzati');
-
-    const subsFormatted = subLangs.length > 0
-        ? subLangs.join(' + ')
-        : (/\b(softsub|hardsub|subbed)\b/i.test(raw) ? 'Inclusi' : 'Non specificati');
-
-    const season = parseSeasonInfo(raw);
-    const isTvSeries = (!!season && season.kind !== 'episode') || /\bserie[\s._]*tv\b|\bepisod/i.test(raw);
-    const yearMatch = raw.match(/\b(19\d\d|20\d\d)\b/);
-    const year = yearMatch ? yearMatch[1] : '';
-
-    let clean = raw.replace(/^\[[^\]]+\]/g, '').replace(/\[.*?\]|\(.*?\)/g, '');
-    clean = stripSeasonText(clean)
-        .replace(/-MirCrew|-SpyRo|-NovaRip|-TNTVillage|\bMirCrew\b/gi, '')
-        .replace(/\b(stagion[ei]|seasons?|completa|complete|pack|in\s*corso|integrale|episodi[oe]?)\b/gi, ' ')
-        .replace(/\b(2160p|4k|1080p|1080i|720p|576p|480p|uhd|fhd|hd)\b/gi, '')
-        .replace(/\b(remux|uhd[\s.-]*bluray|bluray|bdrip|brrip|web-dl|webdl|webrip|hdtv|dvdrip|dvd)\b/gi, '')
-        .replace(/\b(x265|x264|hevc|avc|av1|h\.?264|h\.?265|10bit|10-bit)\b/gi, '')
-        .replace(/\b(xvid|divx|sd|pdtv|dsr|hdrip|tvrip|satrip|dvbrip|pir8)\b/gi, '')
-        .replace(/\b(hdr10\+|hdr10|hdr|dolby[\s.-]*vision|dv|sdr)\b/gi, '')
-        .replace(/\b(dts-hd[\s.-]*ma|dts-hd|dts|truehd|atmos|ddp|eac3|ac3|aac|flac|mp3|5\.1|7\.1|2\.0)\b/gi, '')
-        .replace(/\b(sub[\s._-]*(?:ita|eng|multi|forced)|subita|subeng|multisub|softsub|hardsub)\b/gi, '')
-        .replace(/\b(ita|eng|italian|english|japanese|jap|fra|spa|ger|multi|dual)\b/gi, '')
-        .replace(/[.\-_]+/g, ' ')
-        .replace(/\s{2,}/g, ' ')
-        .trim();
-
-    const baseTitle = clean || raw;
-    const displayTitle = (isTvSeries && season) ? `${baseTitle} – ${season.label}` : baseTitle;
-
-    return {
-        cleanTitle: baseTitle, displayTitle, season, isTvSeries,
-        is4k, is1080p, is720p, isH265, isH264, isAv1, is10bit, isHDR, isDV,
-        source, audioFormatted, subsFormatted, audioLangs, subLangs,
-        audioCodec: audioCodec || 'Standard', year
-    };
-}
-
 function inRecentBlock(link) {
     if (EXCLUDE_SELECTOR) { try { if (link.closest(EXCLUDE_SELECTOR)) return true; } catch (e) {} }
     const body = link.ownerDocument.body;
@@ -1485,31 +1733,101 @@ function isAnnouncementRow(link, row) {
     return !!row.querySelector('dl[class*="announce"], dl[class*="global_"], dl[class*="sticky"]');
 }
 
+// =====================================================================
+//  DATE: data di CREAZIONE del topic vs data dell'ultima risposta
+//  phpBB ordina viewforum per topic_last_post_time (bump): la data del
+//  primo messaggio e' SOLO dentro <dt> (topic-poster), mai in dd.lastpost.
+// =====================================================================
+const IT_MONTHS = { gen: 0, feb: 1, mar: 2, apr: 3, mag: 4, giu: 5, lug: 6, ago: 7, set: 8, ott: 9, nov: 10, dic: 11, jan: 0, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, dec: 11 };
+
+function parseLooseDate(str) {
+    if (!str) return 0;
+    const s = String(str).toLowerCase();
+    const m = s.match(/(\d{1,2})\s+([a-zà-ù]{3,})\.?\s+(\d{4})(?:[,\s]+(\d{1,2}):(\d{2}))?/);
+    if (m) {
+        const mo = IT_MONTHS[m[2].slice(0, 3)];
+        if (mo !== undefined) return new Date(+m[3], mo, +m[1], +(m[4] || 0), +(m[5] || 0)).getTime();
+    }
+    const t = s.match(/(oggi|today|ieri|yesterday)[,\s]+(\d{1,2}):(\d{2})/);
+    if (t) {
+        const d = new Date();
+        if (/ieri|yesterday/.test(t[1])) d.setDate(d.getDate() - 1);
+        d.setHours(+t[2], +t[3], 0, 0);
+        return d.getTime();
+    }
+    return 0;
+}
+
+function timeValue(t) {
+    if (!t) return 0;
+    return Date.parse(t.getAttribute('datetime') || '') || parseLooseDate(t.textContent) || 0;
+}
+
+// Data di creazione: SOLO da <dt>, escludendo il blocco mobile ".responsive-show" (che contiene l'ultimo messaggio)
+function creationTime(row) {
+    const dt = row && row.querySelector('dt');
+    if (!dt) return 0;
+    const ok = el => !el.closest('.responsive-show, dd, .lastpost, .lastsubject');
+    const prefer = [...dt.querySelectorAll('.topic-poster time, .responsive-hide time, .topictitle ~ time')].filter(ok);
+    const any = [...dt.querySelectorAll('time')].filter(ok);
+    const v = timeValue(prefer[0] || any[0]);
+    if (v) return v;
+    // Nessun <time> in <dt>: testo dopo il nome utente ("di utente » 12 ott 2021")
+    const clone = dt.cloneNode(true);
+    clone.querySelectorAll('.responsive-show, .lastpost, .lastsubject, a.topictitle').forEach(e => e.remove());
+    const txt = (clone.textContent || '').replace(/\s+/g, ' ');
+    const i = txt.lastIndexOf('»');
+    return parseLooseDate(i >= 0 ? txt.slice(i + 1) : txt);
+}
+
+// Data dell'ultima risposta: SOLO da dd.lastpost
+function lastReplyTime(row) {
+    return row ? timeValue(row.querySelector('dd.lastpost time')) : 0;
+}
+
+// Autore del topic: dentro <dt>, fuori dal blocco "ultimo messaggio" mobile
+function topicAuthorEl(row) {
+    if (!row) return null;
+    const pool = [...row.querySelectorAll('dt .username, dt .username-coloured')].filter(e => !e.closest('.responsive-show, .lastpost'));
+    return pool[0] || null;
+}
+const userIdOf = el => {
+    const a = el && (el.tagName === 'A' ? el : el.closest('a') || el.querySelector('a'));
+    const m = a && (a.getAttribute('href') || '').match(/[?&]u=(\d+)/);
+    return m ? m[1] : null;
+};
+
 // Costruisce un item "vuoto" a partire dai dati base del topic (usato da forum, ricerca e preferiti)
-function buildItem({ topicId, href, raw, type, views, replies, ts, author }) {
-    const meta = parseReleaseInfo(raw);
+function buildItem({ topicId, href, raw, type, views, replies, ts, lastReplyTs, author, authorId, meta }) {
+    meta = meta || pure.parseReleaseInfo(raw);
+    const n = parseInt(topicId, 10);
     return {
         id: String(topicId), type,
+        numericId: isNaN(n) ? 0 : n,
         url: href, rawTitle: raw,
         cleanTitle: meta.cleanTitle, displayTitle: meta.displayTitle,
         year: meta.year, meta,
-        views: views || 0, replies: replies || 0, ts: ts || 0, author: author || '',
+        views: views || 0, replies: replies || 0, ts: ts || 0, lastReplyTs: lastReplyTs || 0,
+        author: author || '', authorId: authorId || null, authorAvatar: null,
         kind: null,
         body: null,
         poster: null, posterSrc: null, posterAlts: [], backdrop: null,
         posterTried: false, synopsis: null, magnet: null, magnets: [], thanksUrl: null, extId: null,
         origTitle: null, fieldYear: null, genre: null, country: null,
-        tmdbId: null, tmdbKind: null, vote: null, genres: [], trailer: null, imdbId: null, mediaInfo: null
+        tmdbId: null, tmdbKind: null, vote: null, genres: [], trailer: null, imdbId: null, mediaInfo: null,
+        _vers: null
     };
 }
 
-function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = null) {
+// Asincrona: il parsing dei titoli nuovi viene fatto in batch nel Web Worker (un solo messaggio per pagina)
+async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = null) {
     let links = doc.querySelectorAll('a.topictitle');
     if (!links.length) links = [...doc.querySelectorAll('a[href*="viewtopic.php"]')].filter(a => /[?&]t=\d+/.test(a.getAttribute('href') || ''));
 
     const auto = defaultType === 'auto';
     const generic = defaultType === 'Film' || defaultType === 'Serie TV';
-    const items = [];
+    const order = [];
+    const pending = [];
     const seen = new Set();
     let rawCount = 0;
 
@@ -1535,12 +1853,13 @@ function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = nu
             const t = el.firstChild ? el.firstChild.textContent : el.textContent;
             return parseInt(String(t).replace(/[^\d]/g, ''), 10) || 0;
         };
-        const timeEl = row && (row.querySelector('dt time') || row.querySelector('time'));
-        const ts = timeEl ? (Date.parse(timeEl.getAttribute('datetime')) || 0) : 0;
+        const ts = creationTime(row);
+        const lastReplyTs = lastReplyTime(row);
         const views = num('.views');
         const replies = num('.posts');
-        const authorEl = row && row.querySelector('.username, .username-coloured');
+        const authorEl = topicAuthorEl(row);
         const author = authorEl ? authorEl.textContent.trim() : '';
+        const authorId = userIdOf(authorEl);
 
         let forumId = null, forumName = '';
         if (auto && row) {
@@ -1551,24 +1870,41 @@ function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = nu
             }
         }
 
-        let item = registry.get(topicId);
+        const item = registry.get(topicId);
         if (item) {
             item.views = views || item.views;
             item.replies = replies || item.replies;
             item.ts = ts || item.ts;
+            item.lastReplyTs = lastReplyTs || item.lastReplyTs;
             item.author = item.author || author;
+            item.authorId = item.authorId || authorId;
+            if (auto && forumId) { item.forumId = forumId; item.forumName = forumName; }
+            order.push({ item });
         } else {
-            const meta = parseReleaseInfo(raw);
-            let type;
-            if (auto) type = (forumId && forumToSection.get(forumId)) || sectionByName(forumName) || fallbackType || forumName || (meta.isTvSeries ? 'Serie TV' : 'Film');
-            else type = generic ? ((defaultType === 'Serie TV' || meta.isTvSeries) ? 'Serie TV' : 'Film') : defaultType;
-            item = buildItem({ topicId, href, raw, type, views, replies, ts, author });
-            registry.set(topicId, item);
+            const rec = { topicId, href, raw, views, replies, ts, lastReplyTs, author, authorId, forumId, forumName };
+            pending.push(rec);
+            order.push({ rec });
         }
-        if (auto && forumId) { item.forumId = forumId; item.forumName = forumName; }
-        items.push(item);
     });
 
+    if (pending.length) {
+        const metas = await workerCall('titles', pending.map(p => p.raw));
+        pending.forEach((rec, i) => {
+            let item = registry.get(rec.topicId);
+            if (!item) {
+                const meta = metas[i];
+                let type;
+                if (auto) type = (rec.forumId && forumToSection.get(rec.forumId)) || sectionByName(rec.forumName) || fallbackType || rec.forumName || (meta.isTvSeries ? 'Serie TV' : 'Film');
+                else type = generic ? ((defaultType === 'Serie TV' || meta.isTvSeries) ? 'Serie TV' : 'Film') : defaultType;
+                item = buildItem({ ...rec, type, meta });
+                registry.set(rec.topicId, item);
+            }
+            if (auto && rec.forumId) { item.forumId = rec.forumId; item.forumName = rec.forumName; }
+            rec.item = item;
+        });
+    }
+
+    const items = order.map(o => o.item || o.rec.item);
     items.raw = rawCount;
     items.ids = [...seen];
     return items;
@@ -1578,7 +1914,8 @@ function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = nu
 function favSnapshot(item) {
     return {
         id: String(item.id), url: item.url, rawTitle: item.rawTitle, type: item.type,
-        views: item.views || 0, replies: item.replies || 0, ts: item.ts || 0, author: item.author || '',
+        views: item.views || 0, replies: item.replies || 0, ts: item.ts || 0, lastReplyTs: item.lastReplyTs || 0,
+        author: item.author || '', authorId: item.authorId || null,
         forumId: item.forumId || null, forumName: item.forumName || '', added: Date.now()
     };
 }
@@ -1587,7 +1924,7 @@ function favItems() {
     return Object.values(favs).map(f => {
         let it = registry.get(String(f.id));
         if (!it) {
-            it = buildItem({ topicId: f.id, href: f.url, raw: f.rawTitle, type: f.type || 'Film', views: f.views, replies: f.replies, ts: f.ts, author: f.author });
+            it = buildItem({ topicId: f.id, href: f.url, raw: f.rawTitle, type: f.type || 'Film', views: f.views, replies: f.replies, ts: f.ts, lastReplyTs: f.lastReplyTs, author: f.author, authorId: f.authorId });
             if (f.forumId) { it.forumId = f.forumId; it.forumName = f.forumName || ''; }
             registry.set(String(f.id), it);
         }
@@ -1891,7 +2228,6 @@ function httpGetJson(url) {
         }
     });
 }
-
 // Cerca nel post un identificativo esterno affidabile: IMDb (tt1234567) oppure link TMDb diretto.
 // Ritorna 'tt1234567' | 'tmdb:movie:123' | 'tmdb:tv:456' | null
 const IMDB_URL_RE = /imdb\.com\/(?:[a-z]{2}\/)?title\/(tt\d{6,10})/i;
@@ -1936,25 +2272,6 @@ async function tmdbEnrich(out, apiKey) {
             imdbId: j.imdb_id || ext.imdb_id || null
         };
     } catch (e) { return null; }
-}
-
-// ---- Campi della scheda nel post (TITOLO ORIGINALE / ANNO / GENERE / PAESE) ----
-const FIELD_RES = {
-    orig:    /TITOLO\s*ORIGINALE\s*:\s*([^\n]+)/i,
-    year:    /\bANNO\s*:\s*((?:19|20)\d{2})/i,
-    genre:   /\bGENERE\s*:\s*([^\n]+)/i,
-    country: /\b(?:PAESE|NAZIONE)\s*:\s*([^\n]+)/i
-};
-function parsePostFields(text) {
-    const t = text || '';
-    const g = re => { const m = t.match(re); return m ? m[1].trim() : null; };
-    const orig = g(FIELD_RES.orig);
-    return {
-        origTitle: orig ? orig.replace(/[\[(].*?[\])]/g, '').trim().slice(0, 120) || null : null,
-        fieldYear: g(FIELD_RES.year),
-        genre: (g(FIELD_RES.genre) || '').slice(0, 80) || null,
-        country: (g(FIELD_RES.country) || '').slice(0, 80) || null
-    };
 }
 
 const normT = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -2139,46 +2456,6 @@ function findMagnets(doc, rawText) {
     }));
 }
 
-const letterCount = s => (String(s).match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
-function isRealProse(s) {
-    if (!s) return false;
-    const t = String(s).trim();
-    const letters = letterCount(t);
-    return letters >= 38 && letters / t.length >= 0.6;
-}
-
-function stripDividers(text) {
-    return text
-        .split('\n')
-        .filter(l => !(l.trim().length >= 3 && !/[A-Za-z0-9À-ÿ]/.test(l)))
-        .join('\n')
-        .replace(/[-=~_*#]{4,}/g, ' ')
-        .replace(/[ \t]{2,}/g, ' ')
-        .replace(/\n{3,}/g, '\n\n');
-}
-
-const SYN_HEAD = '(?:Trama|Sinossi|Plot|Storyline|Overview|Descrizione)';
-const SYN_STOP = '(?:Scheda\\s*Tecnica|Dati\\s*Tecnici|Info\\s*Release|Cast|Screenshots?|Audio\\s*:|Video\\s*:|Regia|Genere|Durata|Formato|Lingua|Sottotitoli|Download|Magnet|Dimensione|Qualit[aà]|Release|Specifiche|Tracklist|Mediainfo|General|Titolo)';
-const SYN_RE = new RegExp('(?:^|\\n)\\s*[^\\w\\n]{0,4}' + SYN_HEAD + '\\b\\s*(?:del\\s+film|della\\s+serie)?\\s*[:\\-–]?\\s*([\\s\\S]+?)(?=\\n\\s*' + SYN_STOP + '\\b|$)', 'i');
-const SPEC_START_RE = /^(scheda|dati|risoluzione|formato|lingua|grazie|dimensione|anno|audio|video|general|titolo|qualit|sottotit|durata|genere|regia|cast|release|source|magnet|screenshot|nazione|paese|codec)/i;
-
-function extractSynopsis(fullText) {
-    const text = stripDividers(fullText || '');
-    const m = text.match(SYN_RE);
-    if (m) {
-        const paras = m[1].split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
-        let acc = '';
-        for (const p of paras) {
-            acc += (acc ? ' ' : '') + p;
-            if (letterCount(acc) >= 40) break;
-        }
-        if (isRealProse(acc)) return acc.slice(0, 900);
-    }
-    const paragraphs = text.split(/\n\s*\n/).map(t => t.replace(/\s+/g, ' ').trim()).filter(t =>
-        isRealProse(t) && !SPEC_START_RE.test(t) && (t.match(/:/g) || []).length < 4 && !/(?:Format|Bitrate|Bit rate|Codec)\s*:/i.test(t));
-    return paragraphs.length ? paragraphs[0].slice(0, 900) : null;
-}
-
 function applyParsed(item, p) {
     item.poster = p.poster || null;
     item.posterSrc = p.posterSrc || null;
@@ -2201,6 +2478,9 @@ function applyParsed(item, p) {
     item.trailer = p.trailer || null;
     item.imdbId = p.imdbId || null;
     item.mediaInfo = p.mediaInfo || null;
+    if (p.author && !item.author) item.author = p.author;
+    item.authorId = p.authorId || item.authorId || null;
+    item.authorAvatar = p.authorAvatar || item.authorAvatar || null;
     item.kind = p.kind || 'video';
     if (sectionKindOf(item.type) === 'video' && item.kind === 'audio') item.kind = 'video';
     item.body = p.body || null;
@@ -2240,11 +2520,16 @@ function scrapeTopicData(item, el = null) {
             const authorEl = doc.querySelector('.post .username, .post .username-coloured, .postprofile .username');
             const author = authorEl ? authorEl.textContent.trim() : (item.author || '');
             if (author && !item.author) item.author = author;
+            const authorId = userIdOf(authorEl) || item.authorId || null;
+            const avEl = doc.querySelector('.postprofile img.avatar, .post .avatar img, .postprofile .avatar img');
+            const avSrc = avEl && (avEl.getAttribute('src') || '');
+            const authorAvatar = avSrc && !avSrc.startsWith('data:') ? absUrl(avSrc) : null;
             const kind = detectKind(postContent, fullText, magnets, item, !!thanksUrl && !magnets.length);
             item.extId = findExtId(postContent, fullText);
 
-            // Scheda del post: titolo originale, anno, genere, paese (usati per il match TMDb)
-            const fields = parsePostFields(fullText);
+            // Parsing testuale pesante (scheda, sinossi, MediaInfo testuale, corpo) nel Web Worker
+            const pp = await workerCall('post', fullText);
+            const fields = pp.fields;
             Object.assign(item, fields);
 
             let posterUrl = null, posterAlts = [], posterSrc = null, backdrop = null;
@@ -2254,7 +2539,7 @@ function scrapeTopicData(item, el = null) {
             if (postContent) {
                 const found = pickPosters(postContent, item, author);
                 if (found) { posterUrl = found.best; posterAlts = found.alts; posterSrc = 'forum'; }
-                synopsisText = extractSynopsis(fullText);
+                synopsisText = pp.synopsis;
             }
 
             if (kind === 'video') {
@@ -2280,8 +2565,9 @@ function scrapeTopicData(item, el = null) {
                 tmdbId: tm ? tm.id || null : null, tmdbKind: tm ? tm.kind || null : null,
                 vote: tm ? tm.vote || null : null, genres: tm ? tm.genres || [] : [],
                 trailer: tm ? tm.trailer || null : null, imdbId: tm ? tm.imdbId || null : null,
-                mediaInfo: extractMediaInfo(postContent, fullText),
-                body: kind === 'text' ? (stripDividers(fullText).slice(0, 4000) || null) : null
+                mediaInfo: extractMediaInfoDom(postContent) || pp.miText || null,
+                author, authorId, authorAvatar,
+                body: kind === 'text' ? (pp.body || null) : null
             };
 
             applyParsed(item, result);
@@ -2620,8 +2906,11 @@ async function buildHero() {
     renderHero();
     updateHeroVisibility();
     prefetchHero();
-}
+    }
 
+// =====================================================================
+//  MODALE DETTAGLIO
+// =====================================================================
 function setModalImage(item, modalWindow, modalLeft) {
     modalLeft.innerHTML = '';
     const img = document.createElement('img');
@@ -2675,28 +2964,113 @@ function externalLinks(item) {
     return links;
 }
 
+// Tag crew dal titolo della release (es. "...x265-NAHOM" -> NAHOM)
+function releaserCrew(item) {
+    const m = (item.rawTitle || '').match(/-\s*([A-Za-z0-9_.]{3,20})\s*(?:[\])]|$)/);
+    const c = m ? m[1] : '';
+    return /^(?:\d{3,4}p|x26[45]|hevc|h26[45]|ita|eng|multi)$/i.test(c) ? '' : c;
+}
+
+// Riga azioni secondarie: pillole ⭐ / ✓ / ▶ + menu a tendina per i link esterni
 function paintModalTools(item) {
     const box = $('seer-modal-tools');
     if (!box) return;
     const fav = isFav(item.id), seen = isSeen(item.id);
-    let h = `<button class="seer-tool-btn ${fav ? 'on' : ''}" data-act="fav">${fav ? '★ Nei preferiti' : '☆ Aggiungi ai preferiti'}</button>`;
-    h += `<button class="seer-tool-btn ${seen ? 'on' : ''}" data-act="seen">${seen ? '✓ Scaricato (clic per annullare)' : '⬇️ Segna come scaricato'}</button>`;
+    let h = `<button class="seer-tool-btn ${fav ? 'on' : ''}" data-act="fav" title="${fav ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${fav ? '★' : '☆'} Preferiti</button>`;
+    h += `<button class="seer-tool-btn ${seen ? 'on' : ''}" data-act="seen" title="${seen ? 'Clic per annullare' : 'Segna come scaricato'}">✓ ${seen ? 'Scaricato' : 'Segna come scaricato'}</button>`;
     if (item.trailer) h += `<button class="seer-tool-btn trailer" data-act="trailer">▶ Guarda Trailer</button>`;
-    externalLinks(item).forEach(l => {
-        h += `<a class="seer-tool-btn" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${l.ico} ${esc(l.name)}</a>`;
-    });
+    const links = externalLinks(item);
+    if (links.length) {
+        h += `<div class="seer-ext-wrap"><button class="seer-tool-btn" data-act="ext" aria-haspopup="true" title="Cerca altrove">🔗 Link ▾</button>` +
+            `<div class="seer-ext-menu" id="seer-ext-menu">` +
+            links.map(l => `<a href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${l.ico} ${esc(l.name)}</a>`).join('') +
+            `</div></div>`;
+    }
     box.innerHTML = h;
+}
+
+// ---- Versioni (D1): raggruppa le release dello stesso titolo ----
+const verSeason = it => (it.meta && it.meta.season ? it.meta.season.short : '');
+const verTitleKey = it => {
+    if (sectionKindOf(it.type) !== 'video') return 'id:' + it.id;
+    const t = normT(it.cleanTitle);
+    if (!t) return 'id:' + it.id;
+    return t + '|' + (it.meta && it.meta.season ? '' : (it.fieldYear || it.year || '')) + '|' + verSeason(it) + '|' + it.type;
+};
+const verTmdbKey = it => (it.tmdbId && sectionKindOf(it.type) === 'video')
+    ? 'tmdb:' + (it.tmdbKind || '') + ':' + it.tmdbId + '|' + verSeason(it) + '|' + it.type : null;
+
+function versionKeyMap(items) {
+    const alias = new Map();
+    items.forEach(it => { const k = verTmdbKey(it); if (k) alias.set(verTitleKey(it), k); });
+    const m = new Map();
+    items.forEach(it => m.set(it, verTmdbKey(it) || alias.get(verTitleKey(it)) || verTitleKey(it)));
+    return m;
+}
+
+const SRC_RANK = { 'Remux': 50, 'UHD BluRay': 45, 'BluRay': 40, 'WEB-DL': 30, 'HDTV': 20, 'DVDRip': 10, 'Rip': 0 };
+const versionQuality = it => {
+    const m = it.meta || {};
+    return (m.is4k ? 400 : m.is1080p ? 300 : m.is720p ? 200 : 100) + (SRC_RANK[m.source] || 0);
+};
+
+function versionsFor(item) {
+    const pool = [...registry.values()].filter(x => x.type === item.type);
+    if (!pool.includes(item)) pool.push(item);
+    const keys = versionKeyMap(pool);
+    const key = keys.get(item);
+    const out = pool.filter(x => keys.get(x) === key);
+    out.sort((a, b) => (versionQuality(b) - versionQuality(a)) || ((b.numericId || 0) - (a.numericId || 0)));
+    return out;
+}
+
+function versionLabels(list) {
+    const base = list.map(it => {
+        const m = it.meta;
+        const res = m.is4k ? '4K' : m.is1080p ? '1080p' : m.is720p ? '720p' : 'SD';
+        return res + (m.source && m.source !== 'Rip' ? ' ' + m.source : '') + (m.isDV ? ' DV' : m.isHDR ? ' HDR' : '');
+    });
+    const count = {};
+    base.forEach(l => { count[l] = (count[l] || 0) + 1; });
+    return base.map((l, i) => {
+        if (count[l] < 2) return l;
+        const m = list[i].meta;
+        const codec = m.isAv1 ? 'AV1' : m.isH265 ? 'HEVC' : m.isH264 ? 'AVC' : '';
+        return l + ' · ' + [codec, list[i].author].filter(Boolean).join(' ');
+    });
+}
+
+function paintVersions(item) {
+    const bar = $('seer-version-bar');
+    if (!bar) return;
+    if (modalVersions.length < 2) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    const labels = versionLabels(modalVersions);
+    bar.style.display = '';
+    bar.innerHTML = `<span class="seer-ver-label">Versioni disponibili</span><div class="seer-ver-tabs">` +
+        modalVersions.map((v, i) => `<button class="seer-ver-tab ${String(v.id) === String(item.id) ? 'active' : ''}" data-vid="${esc(v.id)}" title="${esc(v.rawTitle)}">[${esc(labels[i])}]</button>`).join('') +
+        `</div>`;
 }
 
 function paintModal(item) {
     const kind = effKind(item) || 'video';
     const win = $('seer-modal-overlay').querySelector('.seer-detail-window');
+    const idStr = String(item.id);
     win.classList.toggle('no-specs', kind !== 'video');
     win.classList.toggle('text-mode', kind === 'text');
 
     $('seer-modal-title').innerText = item.displayTitle;
-    $('seer-modal-forum').href = item.url;
 
+    // Badge releaser + link al forum accanto al titolo
+    let mr = '';
+    if (item.author) {
+        const crew = releaserCrew(item);
+        const showCrew = crew && crew.toLowerCase() !== item.author.toLowerCase();
+        mr += `<button class="seer-meta-pill" data-act="releaser" title="Mostra tutte le release di ${esc(item.author)}">👤 Releaser: ${esc(item.author)}${showCrew ? ` <small>[${esc(crew)}]</small>` : ''}</button>`;
+    }
+    mr += `<a class="seer-meta-pill" href="${esc(item.url)}" target="_blank" rel="noopener" title="Apri il post sul forum">🔗 Forum</a>`;
+    $('seer-modal-metarow').innerHTML = mr;
+
+    // Chips informativi (nessuna duplicazione con il nastro specifiche)
     let chipsHtml = '';
     if (item.year) chipsHtml += `<span class="seer-chip">${esc(item.year)}</span>`;
     chipsHtml += `<span class="seer-chip">${esc(item.type)}</span>`;
@@ -2714,36 +3088,51 @@ function paintModal(item) {
             : (item.genre ? item.genre.split(/[,/|]/).map(s => s.trim()).filter(Boolean).slice(0, 3) : []);
         gl.forEach(g => { chipsHtml += `<span class="seer-chip">${esc(g)}</span>`; });
         if (item.meta.season) chipsHtml += `<span class="seer-chip chip-season">📺 ${esc(item.meta.season.label)}</span>`;
-        chipsHtml += `<span class="seer-chip">${esc(item.meta.source)}</span>`;
-        if (item.meta.isDV) chipsHtml += `<span class="seer-chip" style="background:#f59e0b; color:#000;">Dolby Vision</span>`;
-        if (item.meta.isHDR) chipsHtml += `<span class="seer-chip" style="background:#d946ef; color:#fff;">HDR</span>`;
-        chipsHtml += `<span class="seer-chip chip-audio">🔊 ${esc(item.meta.audioFormatted)}</span>`;
-        chipsHtml += `<span class="seer-chip chip-subs">💬 Sub: ${esc(item.meta.subsFormatted)}</span>`;
     }
     $('seer-modal-chips').innerHTML = chipsHtml;
 
+    // Nastro specifiche unico (risoluzione, HDR, sorgente, codec, audio, sottotitoli)
     if (kind === 'video') {
-        $('spec-res').innerText = item.meta.is4k ? '4K Ultra HD (2160p)' : (item.meta.is1080p ? 'Full HD (1080p)' : (item.meta.is720p ? 'HD (720p)' : 'SD / Standard'));
-        $('spec-codec').innerText = (item.meta.isH265 ? 'HEVC (H.265)' : (item.meta.isH264 ? 'AVC (H.264)' : (item.meta.isAv1 ? 'AV1' : 'H.264'))) + (item.meta.is10bit ? ' 10-bit' : '');
-        $('spec-audio').innerText = item.meta.audioFormatted;
-        $('spec-subs').innerText = item.meta.subsFormatted;
-    }
-    $('seer-modal-raw').innerText = item.rawTitle;
-    $('seer-modal-text').innerText = kind === 'text' ? (item.body || 'Caricamento del testo dal post...') : '';
-    $('seer-modal-overview').innerText = item.synopsis || 'Caricamento sinossi originale dal post...';
-
-    // Fisarmonica MediaInfo
-    const mi = $('seer-mediainfo-wrap');
-    if (item.mediaInfo && kind !== 'text') {
-        mi.style.display = '';
-        if (mi.dataset.itemId !== String(item.id)) { mi.open = false; mi.dataset.itemId = String(item.id); }
-        $('seer-mediainfo-pre').textContent = item.mediaInfo;
+        const m = item.meta;
+        let rb = '';
+        if (m.is4k) rb += `<span class="seer-tag tag-4k">4K UHD · 2160p</span>`;
+        else if (m.is1080p) rb += `<span class="seer-tag tag-1080">Full HD · 1080p</span>`;
+        else if (m.is720p) rb += `<span class="seer-tag tag-720">HD · 720p</span>`;
+        else rb += `<span class="seer-tag tag-sd">SD</span>`;
+        if (m.isDV) rb += `<span class="seer-tag tag-dv">Dolby Vision</span>`;
+        if (m.isHDR) rb += `<span class="seer-tag tag-hdr">HDR</span>`;
+        rb += `<span class="seer-chip">${esc(m.source)}</span>`;
+        const codec = (m.isH265 ? 'HEVC (H.265)' : (m.isH264 ? 'AVC (H.264)' : (m.isAv1 ? 'AV1' : 'H.264'))) + (m.is10bit ? ' 10-bit' : '');
+        rb += `<span class="seer-chip">${esc(codec)}</span>`;
+        rb += `<span class="seer-chip chip-audio">🔊 ${esc(m.audioFormatted)}</span>`;
+        rb += `<span class="seer-chip chip-subs">💬 Sub: ${esc(m.subsFormatted)}</span>`;
+        $('seer-modal-specs').innerHTML = rb;
     } else {
-        mi.style.display = 'none';
-        mi.dataset.itemId = '';
+        $('seer-modal-specs').innerHTML = '';
     }
+
+    $('seer-modal-text').innerText = kind === 'text' ? (item.body || 'Caricamento del testo dal post...') : '';
+
+    // Sinossi con limite di altezza e "Mostra altro / Mostra meno"
+    const ov = $('seer-modal-overview'), tg = $('seer-syn-toggle');
+    if (ov.dataset.itemId !== idStr) { ov.dataset.itemId = idStr; ov.dataset.open = '0'; }
+    const open = ov.dataset.open === '1';
+    ov.innerText = item.synopsis || 'Caricamento sinossi originale dal post...';
+    ov.classList.toggle('clamped', !open);
+    tg.textContent = open ? 'Mostra meno' : 'Mostra altro';
+    tg.style.display = open ? 'block' : 'none';
+    if (!open) requestAnimationFrame(() => { if (ov.scrollHeight > ov.clientHeight + 2) tg.style.display = 'block'; });
+
+    // Cassetto: titolo originale della release + MediaInfo
+    const mi = $('seer-mediainfo-wrap');
+    if (mi.dataset.itemId !== idStr) { mi.open = false; mi.dataset.itemId = idStr; }
+    $('seer-modal-raw').textContent = item.rawTitle;
+    const pre = $('seer-mediainfo-pre');
+    pre.textContent = item.mediaInfo || '';
+    pre.style.display = item.mediaInfo ? '' : 'none';
 
     paintModalTools(item);
+    paintVersions(item);
 }
 
 function copyToClipboard(t) {
@@ -2854,7 +3243,13 @@ async function unlockMagnet(item) {
     return findMagnets(unlocked.doc, unlocked.html);
 }
 
-async function openDetailModal(item) {
+function hideModal() {
+    modalToken++;
+    const o = $('seer-modal-overlay');
+    if (o) o.style.display = 'none';
+}
+
+async function openDetailModal(item, keepVersions = false) {
     const myToken = ++modalToken;
 
     const overlay = $('seer-modal-overlay');
@@ -2862,8 +3257,8 @@ async function openDetailModal(item) {
     const copyBtn = $('seer-copy-btn');
 
     currentModalItem = item;
+    if (!keepVersions) modalVersions = versionsFor(item);
     modalWindow.classList.remove('is-landscape', 'is-portrait');
-    $('seer-mediainfo-wrap').dataset.itemId = '';
 
     currentTopicUrl = null;
     copyBtn.className = 'seer-action-btn';
@@ -2874,10 +3269,13 @@ async function openDetailModal(item) {
     paintModalArt(item);
     renderMagnetUI(item);
     overlay.style.display = 'flex';
+    const sc = overlay.querySelector('.seer-modal-scroll');
+    if (sc) sc.scrollTop = 0;
 
     await scrapeTopicData(item);
     if (myToken !== modalToken) return;
 
+    if (!keepVersions) modalVersions = versionsFor(item);
     paintModal(item);
     paintModalArt(item);
 
@@ -2929,19 +3327,93 @@ function closeTrailer() {
 
 const currentSectionStore = () => sections.get(String(view.section.id));
 
+// =====================================================================
+//  ORDINAMENTO: data di CREAZIONE del topic (tie-break: topic ID numerico)
+// =====================================================================
+const DAY_MS = 864e5;
+const byRelease = (x, y) => {
+    const dx = x.ts || 0, dy = y.ts || 0;
+    if (dx && dy && Math.abs(dy - dx) >= DAY_MS) return dy - dx;      // differenza >= 24h: vale la data
+    return ((y.numericId || 0) - (x.numericId || 0)) || (dy - dx);     // < 24h o data mancante: ID piu' alto = piu' recente
+};
+
 function applySort(items) {
     const a = items.slice();
     switch (sortMode) {
-        case 'views':   a.sort((x, y) => (y.views || 0) - (x.views || 0)); break;
-        case 'replies': a.sort((x, y) => (y.replies || 0) - (x.replies || 0)); break;
-        case 'title':   a.sort((x, y) => x.cleanTitle.localeCompare(y.cleanTitle, 'it', { numeric: true, sensitivity: 'base' })); break;
-        default:        a.sort((x, y) => (y.ts || 0) - (x.ts || 0));
+        case 'activity': a.sort((x, y) => ((y.lastReplyTs || y.ts || 0) - (x.lastReplyTs || x.ts || 0)) || ((y.numericId || 0) - (x.numericId || 0))); break;
+        case 'views':    a.sort((x, y) => (y.views || 0) - (x.views || 0)); break;
+        case 'replies':  a.sort((x, y) => (y.replies || 0) - (x.replies || 0)); break;
+        case 'title':    a.sort((x, y) => x.cleanTitle.localeCompare(y.cleanTitle, 'it', { numeric: true, sensitivity: 'base' })); break;
+        default:         a.sort(byRelease);
     }
     return a;
 }
 
-// ---- Filtri rapidi (facets) ----
-// ---- Filtri rapidi (facets) dipendenti dalla sezione ----
+// =====================================================================
+//  RICERCA FUZZY lato client (Levenshtein con soglia)
+// =====================================================================
+function lev(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev = new Array(b.length + 1);
+    for (let j = 0; j <= b.length; j++) prev[j] = j;
+    for (let i = 1; i <= a.length; i++) {
+        const cur = [i];
+        let rowMin = i;
+        for (let j = 1; j <= b.length; j++) {
+            const c = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+            const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + c);
+            cur[j] = v;
+            if (v < rowMin) rowMin = v;
+        }
+        if (rowMin > max) return max + 1;
+        prev = cur;
+    }
+    return prev[b.length];
+}
+
+const fuzzyHay = it => it._hay || (it._hay = normT(it.cleanTitle + ' ' + (it.origTitle || '') + ' ' + it.rawTitle));
+const fuzzyWords = it => it._words || (it._words = [...new Set(fuzzyHay(it).split(' '))].filter(w => w.length > 2));
+
+// 0 = nessuna corrispondenza; piu' alto = migliore
+function fuzzyScore(it, q) {
+    const tokens = normT(q).split(' ').filter(Boolean);
+    if (!tokens.length) return 1;
+    const hay = fuzzyHay(it);
+    let total = 0;
+    for (const t of tokens) {
+        let s = 0;
+        if (hay.includes(t)) s = 3;
+        else {
+            const maxD = t.length <= 3 ? 0 : t.length <= 6 ? 1 : 2;
+            if (maxD) {
+                for (const w of fuzzyWords(it)) {
+                    if (Math.abs(w.length - t.length) <= maxD && lev(t, w, maxD) <= maxD) { s = 2; break; }
+                    if (w.length > t.length && lev(t, w.slice(0, t.length), maxD) <= maxD) s = Math.max(s, 1);
+                }
+            }
+        }
+        if (!s) return 0;
+        total += s;
+    }
+    return total / tokens.length;
+}
+
+const inScope = (it, sc) => {
+    if (sc.mode === 'all') return true;
+    if (sc.label === 'Film e Serie TV') return it.type === 'Film' || it.type === 'Serie TV';
+    return it.type === sc.label;
+};
+function fuzzyPool(query, sc) {
+    return [...registry.values()]
+        .map(it => [it, inScope(it, sc) ? fuzzyScore(it, query) : 0])
+        .filter(x => x[1] > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(x => x[0]);
+}
+
+// =====================================================================
+//  FILTRI rapidi + avanzati (E1)
+// =====================================================================
 const FACETS = [['q4k', '💎 Solo 4K / UHD'], ['hdr', '📺 Dolby Vision / HDR'], ['complete', '📦 Stagione Completa']];
 const FMT = {
     mp3:  ['MP3',        /\bmp3\b/i],
@@ -2965,7 +3437,7 @@ function curSectionName() {
 
 function facetScope() {
     if (search.active && search.scope === 'all') return 'mixed';
-    if (!search.active && view.key === 'favs') return 'mixed';
+    if (!search.active && (view.key === 'favs' || view.key === 'releaser')) return 'mixed';
     const n = curSectionName();
     return (n && sectionKindOf(n)) || 'home';
 }
@@ -2976,13 +3448,16 @@ function facetsFor() {
     return { vid, complete: vid && !FILM_ONLY.has(n), type: sc === 'home', fmts: FMT_BY_SECTION[n] || [] };
 }
 
+const advActive = f => !!((f.vid && (filters.minVote > 0 || filters.codec !== 'all')) || filters.yFrom || filters.yTo || filters.releaser);
+
 function anyFilter() {
     const f = facetsFor();
     return hideSeen
         || (f.vid && (filters.q4k || filters.hdr || filters.ita))
         || (f.complete && filters.complete)
         || (f.type && filters.type !== 'all')
-        || f.fmts.includes(filters.fmt);
+        || f.fmts.includes(filters.fmt)
+        || advActive(f);
 }
 
 const isCompleteRelease = it =>
@@ -2991,16 +3466,22 @@ const isCompleteRelease = it =>
 
 const fmtHaystack = it => [it.rawTitle, it.mediaInfo || '', ...(it.magnets || []).map(m => m.dn || '')].join(' ');
 
-function applyFilters(items) {
-    if (!anyFilter()) return items;
+// Ritorna un predicato (o null se nessun filtro e' attivo)
+function makeFilter() {
+    if (!anyFilter()) return null;
     const f = facetsFor();
     const fmtRe = f.fmts.includes(filters.fmt) ? FMT[filters.fmt][1] : null;
-    return items.filter(it => {
+    const rl = String(filters.releaser || '').toLowerCase();
+    return it => {
         const m = it.meta;
         if (f.vid) {
             if (filters.q4k && !m.is4k) return false;
             if (filters.hdr && !(m.isDV || m.isHDR)) return false;
             if (filters.ita && !m.audioLangs.includes('ITA')) return false;
+            if (filters.minVote > 0 && !(it.vote >= filters.minVote)) return false;
+            if (filters.codec === 'av1' && !m.isAv1) return false;
+            if (filters.codec === 'hevc' && !m.isH265) return false;
+            if (filters.codec === 'avc' && !m.isH264) return false;
         }
         if (f.complete && filters.complete && !isCompleteRelease(it)) return false;
         if (f.type) {
@@ -3008,9 +3489,15 @@ function applyFilters(items) {
             if (filters.type === 'series' && it.type !== 'Serie TV') return false;
         }
         if (fmtRe && !fmtRe.test(fmtHaystack(it))) return false;
+        if (filters.yFrom || filters.yTo) {
+            const y = parseInt(it.fieldYear || it.year, 10) || 0;
+            if (filters.yFrom && (!y || y < filters.yFrom)) return false;
+            if (filters.yTo && (!y || y > filters.yTo)) return false;
+        }
+        if (rl && !((it.author || '') + ' ' + releaserCrew(it)).toLowerCase().includes(rl)) return false;
         if (hideSeen && isSeen(it.id)) return false;
         return true;
-    });
+    };
 }
 
 function renderFacets() {
@@ -3022,22 +3509,218 @@ function renderFacets() {
     if (f.vid) groups.push(FACETS.filter(([k]) => k !== 'complete' || f.complete).map(([k, l]) => chip(`data-facet="${k}"`, l, filters[k])).join(''));
     if (f.type) groups.push(chip('data-ftype="film"', '🗂️ Solo Film', filters.type === 'film') + chip('data-ftype="series"', '📺 Solo Serie', filters.type === 'series'));
     if (f.fmts.length) groups.push(f.fmts.map(k => chip(`data-fmt="${k}"`, FMT[k][0], filters.fmt === k)).join(''));
-    groups.push(chip('data-facet="hideSeen"', '🙈 Nascondi già scaricati', hideSeen) + (anyFilter() ? chip('data-facet="reset"', '✖ Azzera filtri', false, 'reset') : ''));
+    const act = advActive(f);
+    groups.push(
+        chip('data-facet="adv"', '🎚️ Filtri avanzati' + (act ? ' •' : ''), advOpen || act) +
+        chip('data-facet="hideSeen"', '🙈 Nascondi già scaricati', hideSeen) +
+        (anyFilter() ? chip('data-facet="reset"', '✖ Azzera filtri', false, 'reset') : '')
+    );
     box.innerHTML = groups.join('<span class="seer-facet-sep"></span>');
 }
 
+// Pannello filtri avanzati: l'HTML e' statico, qui si sincronizzano solo valori e visibilita'
+function updateAdv() {
+    const box = $('seer-adv');
+    if (!box) return;
+    box.classList.toggle('open', advOpen);
+    const f = facetsFor();
+    $('seer-adv-vote-wrap').style.display = f.vid ? '' : 'none';
+    $('seer-adv-codec-wrap').style.display = f.vid ? '' : 'none';
+    const setVal = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.value = v; };
+    setVal('seer-adv-vote', filters.minVote || 0);
+    $('seer-adv-vote-val').textContent = filters.minVote > 0 ? filters.minVote.toFixed(1) + '+' : 'Tutte';
+    setVal('seer-adv-yfrom', filters.yFrom || '');
+    setVal('seer-adv-yto', filters.yTo || '');
+    setVal('seer-adv-rel', filters.releaser || '');
+    setVal('seer-adv-codec', filters.codec);
+
+    const names = [...new Set(lastBase.map(i => i.author).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 300);
+    const sig = names.join('|');
+    const dl = $('seer-adv-rel-list');
+    if (dl && dl.dataset.sig !== sig) { dl.dataset.sig = sig; dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join(''); }
+
+    $('seer-adv-note').textContent = (f.vid && filters.minVote > 0)
+        ? (getTmdbKey() ? 'Carico i voti TMDb dei titoli in background…' : 'Il filtro voto richiede la chiave TMDb (⚙️ Impostazioni).')
+        : '';
+}
+
+// Per filtrare per voto serve aver letto i post: li carica a piccoli lotti (poi riesegue il render)
+let warmTimer = null;
+function warmRatings(items) {
+    if (!(filters.minVote > 0) || !getTmdbKey()) return;
+    const todo = items.filter(it => !it.posterTried && !ratingTried.has(it.id) && sectionKindOf(it.type) === 'video').slice(0, 24);
+    if (!todo.length) return;
+    todo.forEach(it => ratingTried.add(it.id));
+    Promise.all(todo.map(it => scrapeTopicData(it).catch(() => null))).then(() => {
+        clearTimeout(warmTimer);
+        warmTimer = setTimeout(() => {
+            if (filters.minVote > 0 && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue());
+        }, 500);
+    });
+}
+
+// =====================================================================
+//  VERSION STACKING nella lista (D1)
+// =====================================================================
+function stackVersions(sorted, pred) {
+    const keys = versionKeyMap(sorted);
+    const groups = new Map();
+    sorted.forEach(it => {
+        const k = keys.get(it);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(it);
+    });
+    const out = [];
+    const emitted = new Set();
+    sorted.forEach(it => {
+        const k = keys.get(it);
+        const arr = groups.get(k);
+        arr.forEach(x => { x._vers = arr.length > 1 ? arr : null; });
+        if (emitted.has(k)) return;
+        if (pred && !pred(it)) return;
+        emitted.add(k);
+        out.push(it);
+    });
+    return out;
+}
+
+// =====================================================================
+//  VISTA RELEASER (sezione 4)
+// =====================================================================
+const relCatOf = it => {
+    const t = it.type;
+    if (t === 'Film' || t === 'Anime Movies' || t === 'Cartoon Movies') return 'film';
+    if (t === 'Serie TV' || t === 'Anime Series' || t === 'Cartoon Series') return 'series';
+    return 'other';
+};
+
+const relSearchUrl = r => r.id
+    ? `/search.php?author_id=${encodeURIComponent(r.id)}&sr=topics&sf=firstpost&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`
+    : `/search.php?keywords=&author=${encodeURIComponent(r.name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`;
+
+async function fetchAvatar(id) {
+    if (!id) return null;
+    const ck = CACHE_PREFIX + 'av_' + id;
+    const c = cacheGet(ck);
+    if (c) { try { return JSON.parse(c).src || null; } catch (e) {} }
+    try {
+        await netGate();
+        const r = await fetch(`/memberlist.php?mode=viewprofile&u=${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+        if (!r.ok) return null;
+        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const img = doc.querySelector('.profile-avatar img, .avatar-container img, dl.left-box img.avatar, img.avatar, .postprofile img');
+        const s = img && img.getAttribute('src');
+        const src = s && !s.startsWith('data:') ? absUrl(s) : null;
+        cacheSet(ck, JSON.stringify({ t: Date.now(), src }));
+        return src;
+    } catch (e) { return null; }
+}
+
+function renderRelPanel() {
+    const p = $('seer-rel-panel');
+    if (!p) return;
+    const on = view.key === 'releaser' && rel && !search.active;
+    p.classList.toggle('show', !!on);
+    if (!on) { p.innerHTML = ''; return; }
+
+    const cnt = { all: rel.items.length, film: 0, series: 0, other: 0 };
+    rel.items.forEach(it => { cnt[relCatOf(it)]++; });
+    const totalTxt = rel.total > 0
+        ? `${rel.total} release totali${rel.items.length < rel.total ? ` · ${rel.items.length} caricate` : ''}`
+        : `${rel.items.length}${rel.exhausted ? '' : '+'} release`;
+    const pill = (c, label) => `<button class="seer-facet ${rel.cat === c ? 'active' : ''}" data-rcat="${c}">${label} <small>${cnt[c]}</small></button>`;
+
+    p.innerHTML =
+        `<button class="seer-rel-back" data-rel="back">← Indietro</button>` +
+        `<div class="seer-rel-avatar">${rel.avatar ? `<img src="${esc(rel.avatar)}" alt="" referrerpolicy="no-referrer">` : '👤'}</div>` +
+        `<div class="seer-rel-info">` +
+            `<h3 class="seer-rel-name">${esc(rel.name)}</h3>` +
+            `<span class="seer-rel-total">${esc(totalTxt)}${rel.loading ? ' · caricamento…' : ''}</span>` +
+            `<div class="seer-rel-pills">${pill('all', '🗂️ Tutte')}${pill('film', '🎬 Film')}${pill('series', '📺 Serie TV')}${pill('other', '📚 Altro')}</div>` +
+        `</div>`;
+    const im = p.querySelector('.seer-rel-avatar img');
+    if (im) im.addEventListener('error', () => { im.parentElement.textContent = '👤'; });
+}
+
+async function loadReleaserPage() {
+    const mine = rel;
+    if (!mine || mine.loading || mine.exhausted) return;
+    mine.loading = true;
+    renderRelPanel();
+    try {
+        const page = await fetchSearchPage(mine.nextUrl || relSearchUrl(mine), { relaxed: true, fallbackType: null });
+        if (rel !== mine) return;
+        if (page.flood) {
+            mine.error = true;
+            toast('⏳ Limite frequenza ricerche del forum raggiunto: riprova tra qualche secondo', 'warn', 4500);
+            return;
+        }
+        mine.error = false;
+        const own = page.items.filter(it => !it.author || it.author.toLowerCase() === mine.name.toLowerCase());
+        mine.items = uniqById([...mine.items, ...own]);
+        if (page.total && !mine.total) mine.total = page.total;
+        mine.nextUrl = page.nextUrl;
+        mine.exhausted = !page.nextUrl;
+    } catch (e) {
+        console.error('Releaser load failed', e);
+        if (rel === mine) { mine.error = true; toast('Caricamento del releaser non riuscito', 'err'); }
+    } finally {
+        mine.loading = false;
+        if (rel === mine) { renderRelPanel(); if (!search.active) renderDeck(localFilterValue()); }
+    }
+}
+
+async function openReleaser(name, id, avatar) {
+    if (!name) return;
+    hideModal();
+    viewToken++;
+    searchToken++;
+    search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
+    $('seer-search-input').value = '';
+    const prev = view.key === 'releaser' ? (rel && rel.prev) : { key: view.key, section: view.section };
+    const mine = rel = { name, id: id || null, avatar: avatar || null, items: [], total: 0, cat: 'all', nextUrl: null, exhausted: false, loading: false, error: false, prev: prev || { key: 'home', section: null } };
+    view = { key: 'releaser', section: null };
+    $('seer-sidebar').classList.remove('open');
+    $('mirseer-app').scrollTop = 0;
+    updateChrome();
+    showListMessage(`Caricamento delle release di ${esc(name)}…`);
+
+    if (!mine.avatar && id) fetchAvatar(id).then(src => { if (rel === mine && src) { mine.avatar = src; renderRelPanel(); } });
+
+    for (let i = 0; i < INITIAL_PAGES && rel === mine && !mine.exhausted && !mine.error; i++) await loadReleaserPage();
+}
+
+async function loadMoreReleaser() {
+    $('seer-load-more-btn').innerText = 'Caricamento in corso...';
+    await loadReleaserPage();
+    updateLoadMore();
+}
+
+// =====================================================================
+//  LISTA / RENDER
+// =====================================================================
 function getVisibleItems() {
     let base;
     if (search.active) base = search.items;
     else if (view.key === 'favs') base = favItems();
+    else if (view.key === 'releaser') base = rel ? rel.items : [];
     else if (view.key === 'section') base = currentSectionStore().items;
     else {
         base = main.items;
         if (view.key === 'films') base = base.filter(i => i.type === 'Film');
         if (view.key === 'series') base = base.filter(i => i.type === 'Serie TV');
     }
+    lastBase = base;
     lastBaseCount = base.length;
-    return applyFilters(applySort(base));
+
+    let sorted = applySort(base);
+    if (!search.active && view.key === 'releaser' && rel && rel.cat !== 'all') sorted = sorted.filter(it => relCatOf(it) === rel.cat);
+    const pred = makeFilter();
+    if (!search.active && (view.key === 'favs' || view.key === 'releaser')) {
+        sorted.forEach(x => { x._vers = null; });
+        return pred ? sorted.filter(pred) : sorted;
+    }
+    return stackVersions(sorted, pred);
 }
 
 function showListMessage(text, cls = '') {
@@ -3059,6 +3742,7 @@ function updateLoadMore() {
     let show = true, label = '📥 Carica Altre Uscite';
     if (search.active) { show = !!search.nextUrl; label = '📥 Carica altri risultati'; }
     else if (view.key === 'favs') { show = false; }
+    else if (view.key === 'releaser') { show = !!rel && !rel.exhausted; label = '📥 Carica altre release'; }
     else if (view.key === 'section') { show = !currentSectionStore().exhausted; label = '📥 Carica altri topic'; }
     else { show = !main.exhausted; }
     btn.style.display = show ? '' : 'none';
@@ -3107,6 +3791,7 @@ function buildSearchFilter() {
 function updateChrome() {
     const t = $('seer-section-title');
     if (search.active) t.textContent = search.scope === 'all' ? `🌐 "${search.query}" in tutte le sezioni` : `🔍 "${search.query}" in ${search.label}`;
+    else if (view.key === 'releaser' && rel) t.textContent = '👤 ' + rel.name;
     else if (view.key === 'films') t.textContent = '🎬 Film Disponibili';
     else if (view.key === 'series') t.textContent = '📺 Serie TV';
     else if (view.key === 'favs') t.textContent = '⭐ I miei Preferiti';
@@ -3114,14 +3799,20 @@ function updateChrome() {
     else t.textContent = '🆕 Ultime Release';
 
     const hint = $('seer-search-hint');
-    if (search.active && search.scope === 'scoped') {
-        hint.innerHTML = `<span>Risultati solo in <b>${esc(search.label)}</b>.</span><button class="seer-load-btn" id="seer-search-all-btn" style="padding:6px 14px; font-size:12.5px;">🌐 Cerca in tutte le sezioni</button>`;
-    } else hint.innerHTML = '';
+    let hh = '';
+    if (search.active) {
+        if (search.fuzzy) hh = `<span>Nessun risultato esatto sul forum: mostro i titoli già caricati più simili a "<b>${esc(search.query)}</b>".</span>`;
+        else if (search.scope === 'scoped') hh = `<span>Risultati solo in <b>${esc(search.label)}</b>.</span>`;
+        if (search.scope === 'scoped') hh += `<button class="seer-load-btn" id="seer-search-all-btn" style="padding:6px 14px; font-size:12.5px;">🌐 Cerca in tutte le sezioni</button>`;
+    }
+    hint.innerHTML = hh;
 
     $('seer-search-input').placeholder = `Cerca in ${resolveSearchScope().label}…  ( / )`;
 
     document.querySelectorAll('#seer-view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === viewMode));
     renderFacets();
+    renderRelPanel();
+    updateAdv();
     syncSidebarActive();
     updateHeroVisibility();
     updateLoadMore();
@@ -3157,17 +3848,19 @@ function fillRow(row, item) {
         if (m.is4k) badgesHtml += `<span class="seer-tag tag-4k">4K UHD</span>`;
         else if (m.is1080p) badgesHtml += `<span class="seer-tag tag-1080">1080p</span>`;
         else if (m.is720p) badgesHtml += `<span class="seer-tag tag-720">720p</span>`;
+        else badgesHtml += `<span class="seer-tag tag-sd">SD</span>`;
         if (m.isDV) badgesHtml += `<span class="seer-tag tag-dv">DV</span>`;
         else if (m.isHDR) badgesHtml += `<span class="seer-tag tag-hdr">HDR</span>`;
         if (m.season) badgesHtml += `<span class="seer-tag tag-season">📺 ${esc(m.season.short)}</span>`;
         specsHtml = `
             <span class="seer-pill audio">🔊 ${esc(m.audioFormatted)}</span>
             ${m.subLangs.length ? `<span class="seer-pill subs">💬 Sub: ${esc(m.subsFormatted)}</span>` : ''}
-            <span class="seer-pill codec">${esc(m.isH265 ? 'H.265' : (m.isH264 ? 'H.264' : 'Video'))}</span>
+            <span class="seer-pill codec">${esc(m.isAv1 ? 'AV1' : (m.isH265 ? 'H.265' : (m.isH264 ? 'H.264' : 'Video')))}</span>
             <span class="seer-pill codec">${esc(m.source)}</span>`;
     } else {
         specsHtml = `<span class="seer-preview">Lettura del post…</span>`;
     }
+    if (item._vers && item._vers.length > 1) badgesHtml += `<span class="seer-tag tag-vers" title="Più versioni disponibili">📚 ${item._vers.length} versioni</span>`;
     if (seen) badgesHtml += `<span class="seer-tag tag-seen">✓ Scaricato</span>`;
 
     const icon = kind ? kindIcon(item) : typeIcon(item);
@@ -3215,19 +3908,18 @@ function renderDeck(filterQuery = '') {
 
     let displayed = getVisibleItems();
     updateChrome();
-    if (filterQuery && !search.active) {
-        const q = filterQuery.toLowerCase();
-        displayed = displayed.filter(item => item.rawTitle.toLowerCase().includes(q));
-    }
+    if (filterQuery && !search.active) displayed = displayed.filter(item => fuzzyScore(item, filterQuery) > 0);
 
     $('seer-count').innerText = search.active
         ? `${displayed.length} risultati per "${search.query}"`
-        : `${displayed.length} uscite mostrate`;
+        : (view.key === 'releaser' ? `${displayed.length} release mostrate` : `${displayed.length} uscite mostrate`);
 
     if (displayed.length === 0) {
         if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Non hai ancora preferiti: premi ☆ su una release per aggiungerla qui.');
+        else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
         else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita corrisponde ai filtri attivi. Prova ad azzerarli o a caricare altre uscite.');
         else showListMessage('Nessuna uscita da mostrare qui.');
+        warmRatings(lastBase);
         return;
     }
 
@@ -3264,18 +3956,21 @@ function renderDeck(filterQuery = '') {
     } else {
         displayed.forEach(addRow);
     }
+    warmRatings(lastBase);
 }
 
 const localFilterValue = () => {
     const q = $('seer-search-input').value.trim();
     return (!search.active && q.length >= 3) ? q : '';
 };
+
 async function setView(key, section = null) {
     const token = ++viewToken;
+    rel = null;
 
     if (search.active) {
         searchToken++;
-        search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null };
+        search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
     }
     $('seer-search-input').value = '';
     view = { key, section };
@@ -3291,7 +3986,7 @@ async function setView(key, section = null) {
         if (!store.loaded) {
             updateChrome();
             showListMessage(`Caricamento di "${esc(section.name)}"...`);
-            await loadSection(section, store);
+            await loadSection(section, store, INITIAL_PAGES);
             if (token !== viewToken) return;
         }
     } else if (key !== 'favs' && !main.loaded) {
@@ -3303,12 +3998,17 @@ async function setView(key, section = null) {
     renderDeck();
 }
 
+// =====================================================================
+//  CARICAMENTO FORUM (con pausa anti-flood e buffer multi-pagina)
+// =====================================================================
 async function fetchForumTopics(forumId, typeName, start = 0, relaxed = false) {
     try {
+        await netGate();
         const resp = await fetch(`/viewforum.php?f=${forumId}&start=${start}`, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const text = await resp.text();
         const doc = new DOMParser().parseFromString(text, 'text/html');
-        return { doc, items: parseTopicsFromDoc(doc, typeName, relaxed) };
+        return { doc, items: await parseTopicsFromDoc(doc, typeName, relaxed) };
     } catch (e) {
         console.error('Forum fetch error ' + forumId, e);
         const items = [];
@@ -3371,12 +4071,18 @@ const uniqById = arr => {
     return arr.filter(i => (seen.has(String(i.id)) ? false : (seen.add(String(i.id)), true)));
 };
 
+// Anti-bump: carica un buffer di INITIAL_PAGES pagine (start=0, 25, 50) cosi' le release nuove
+// spinte indietro da topic "rinfrescati" vengono comunque recuperate e ordinate per data di creazione.
 async function loadMain() {
     main.group = makeGroup([
         makeCursor(FILM_FORUM_ID, 'Film', false, true),
         makeCursor(SERIES_FORUM_ID, 'Serie TV', false, true)
     ], false, MAIN_SUB_EXCLUDE_RE);
-    main.items = uniqById(await pullGroup(main.group));
+    let all = [];
+    for (let p = 0; p < INITIAL_PAGES && !groupDone(main.group); p++) {
+        all = all.concat(await pullGroup(main.group));
+    }
+    main.items = uniqById(all);
     main.exhausted = groupDone(main.group);
     main.loaded = true;
     if (settings.heroEnabled) buildHero();
@@ -3388,9 +4094,10 @@ async function loadMorePages() {
     renderDeck(localFilterValue());
 }
 
-async function loadSection(section, store) {
+async function loadSection(section, store, pages = 1) {
     if (!store.group) store.group = makeGroup([makeCursor(section.id, section.name, true, true)], true, SIDE_HIDE_RE);
-    const got = await pullGroup(store.group);
+    let got = [];
+    for (let p = 0; p < pages && !groupDone(store.group); p++) got = got.concat(await pullGroup(store.group));
     const known = new Set(store.items.map(i => String(i.id)));
     got.forEach(i => { if (!known.has(String(i.id))) { known.add(String(i.id)); store.items.push(i); } });
     store.loaded = true;
@@ -3474,6 +4181,9 @@ async function loadSidebar() {
     renderSidebarSections();
 }
 
+// =====================================================================
+//  RICERCA SUL FORUM (+ ripiego fuzzy locale)
+// =====================================================================
 function buildSearchUrl(query, fids) {
     const q = query.trim();
     const forumParams = fids.map(id => `&f[]=${id}&fid[]=${id}`).join('');
@@ -3481,16 +4191,21 @@ function buildSearchUrl(query, fids) {
 }
 
 async function fetchSearchPage(url, sc) {
+    await netGate();
     const resp = await fetch(url, { credentials: 'same-origin' });
     const html = await resp.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
-    const items = parseTopicsFromDoc(doc, 'auto', sc.relaxed, sc.fallbackType);
+    const items = await parseTopicsFromDoc(doc, 'auto', sc.relaxed, sc.fallbackType);
     const msg = (doc.querySelector('#message') || {}).textContent || '';
     const flood = items.length === 0 && /presto|soon|flood/i.test(msg);
     const next = doc.querySelector('a[rel="next"]');
     const nextUrl = next ? new URL(next.getAttribute('href'), location.href).href : null;
-    return { items, flood, nextUrl };
+
+    const info = [...doc.querySelectorAll('.searchresults-title, .action-bar .pagination, .pagination')].map(e => e.textContent).join(' ');
+    const tm = info.match(/(\d[\d.,]*)\s*(?:risultat|corrispondenz|match|result)/i);
+    const total = tm ? parseInt(tm[1].replace(/[.,]/g, ''), 10) || 0 : 0;
+    return { items, flood, nextUrl, total };
 }
 
 async function runSearch(query) {
@@ -3508,7 +4223,18 @@ async function runSearch(query) {
             showListMessage('⏳ Il forum limita la frequenza delle ricerche. Attendi qualche secondo e riprova.', 'warn');
             return;
         }
-        search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: page.items, nextUrl: page.nextUrl, sc };
+
+        // Nessun risultato esatto: ripiega sulla ricerca fuzzy tra i titoli gia' caricati (tolleranza ai refusi)
+        if (!page.items.length) {
+            const fz = fuzzyPool(query, sc);
+            if (fz.length) {
+                search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: fz, nextUrl: null, sc, fuzzy: true };
+                renderDeck();
+                return;
+            }
+        }
+
+        search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: page.items, nextUrl: page.nextUrl, sc, fuzzy: false };
         renderDeck();
         if (page.items.length === 0) showListMessage(`Nessun risultato per "${esc(query)}" in ${esc(sc.label)}.`);
     } catch (e) {
@@ -3534,7 +4260,7 @@ async function loadMoreSearch() {
 
 function resetSearchState() {
     searchToken++;
-    search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null };
+    search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
 }
 
 function exitSearchMode(filterQuery = '') {
@@ -3542,6 +4268,18 @@ function exitSearchMode(filterQuery = '') {
     renderDeck(filterQuery);
 }
 
+// Piccoli stili aggiuntivi (select del pannello avanzato, contatori nelle pillole releaser)
+GM_addStyle(`
+.seer-adv select.seer-adv-input { width: auto; cursor: pointer; }
+.seer-adv select.seer-adv-input option { background: #0e1424; color: #f8fafc; }
+#mirseer-app.seer-light .seer-adv select.seer-adv-input option { background: #fff; color: #0f172a; }
+.seer-facet small { opacity: 0.7; margin-left: 4px; font-weight: 800; }
+.seer-meta-pill { border: 1px solid var(--seer-border); }
+`);
+
+// =====================================================================
+//  INIT
+// =====================================================================
 function init() {
     if ($('mirseer-fab')) return;
 
@@ -3594,15 +4332,45 @@ function init() {
                             <button data-view="grid" title="Vista locandine">▦</button>
                         </div>
                         <select id="seer-sort-select" class="seer-sort-select" title="Ordina per">
-                            <option value="recent">🕒 Più recenti</option>
+                            <option value="recent">🕒 Data di pubblicazione</option>
+                            <option value="activity">💬 Ultima attività</option>
                             <option value="views">🔥 Più visti</option>
                             <option value="title">🔤 Titolo (A - Z)</option>
-                            <option value="replies">💬 Più risposte</option>
+                            <option value="replies">📈 Più risposte</option>
                         </select>
                     </div>
                 </div>
+                <div class="seer-rel-panel" id="seer-rel-panel"></div>
                 <div id="seer-search-hint"></div>
                 <div class="seer-facets" id="seer-facets"></div>
+                <div class="seer-adv" id="seer-adv">
+                    <div class="seer-adv-item" id="seer-adv-vote-wrap">
+                        <span>⭐ Valutazione TMDb</span>
+                        <input type="range" id="seer-adv-vote" min="0" max="9" step="0.5" value="0" />
+                        <b id="seer-adv-vote-val">Tutte</b>
+                    </div>
+                    <div class="seer-adv-item">
+                        <span>📅 Anno</span>
+                        <input type="number" class="seer-adv-input" id="seer-adv-yfrom" placeholder="2015" min="1900" max="2100" />
+                        <span>–</span>
+                        <input type="number" class="seer-adv-input" id="seer-adv-yto" placeholder="2026" min="1900" max="2100" />
+                    </div>
+                    <div class="seer-adv-item">
+                        <span>👤 Releaser / Crew</span>
+                        <input type="text" class="seer-adv-input wide" id="seer-adv-rel" list="seer-adv-rel-list" placeholder="Tutti i releaser" autocomplete="off" spellcheck="false" />
+                        <datalist id="seer-adv-rel-list"></datalist>
+                    </div>
+                    <div class="seer-adv-item" id="seer-adv-codec-wrap">
+                        <span>🎞️ Codec</span>
+                        <select class="seer-adv-input" id="seer-adv-codec">
+                            <option value="all">Tutti</option>
+                            <option value="av1">AV1</option>
+                            <option value="hevc">HEVC / H.265</option>
+                            <option value="avc">AVC / H.264</option>
+                        </select>
+                    </div>
+                    <span class="seer-adv-note" id="seer-adv-note"></span>
+                </div>
                 <div class="seer-list seer-main-list" id="seer-main-list"></div>
                 <div style="text-align:center; margin:35px 0 25px 0;">
                     <button id="seer-load-more-btn" class="seer-load-btn">📥 Carica Altre Uscite</button>
@@ -3613,34 +4381,35 @@ function init() {
         <div id="seer-modal-overlay">
             <div class="seer-detail-window">
                 <button class="seer-modal-close" id="seer-modal-close-btn">&times;</button>
-                <a class="seer-modal-forum" id="seer-modal-forum" href="#" target="_blank" rel="noopener" title="Apri il post sul forum">🔗 Forum</a>
                 <div class="seer-modal-left" id="seer-modal-left-art"></div>
                 <div class="seer-modal-right">
-                    <h2 class="seer-modal-title" id="seer-modal-title"></h2>
-                    <div class="seer-chips-row" id="seer-modal-chips"></div>
-                    <div class="seer-modal-tools" id="seer-modal-tools"></div>
-                    <div class="seer-specs-matrix">
-                        <div class="seer-spec-box"><span class="seer-spec-label">Risoluzione</span><span class="seer-spec-value" id="spec-res">--</span></div>
-                        <div class="seer-spec-box"><span class="seer-spec-label">Video Codec</span><span class="seer-spec-value" id="spec-codec">--</span></div>
-                        <div class="seer-spec-box"><span class="seer-spec-label">Traccia Audio</span><span class="seer-spec-value" id="spec-audio">--</span></div>
-                        <div class="seer-spec-box"><span class="seer-spec-label">Sottotitoli</span><span class="seer-spec-value" id="spec-subs">--</span></div>
+                    <div class="seer-modal-scroll">
+                        <h2 class="seer-modal-title" id="seer-modal-title"></h2>
+                        <div class="seer-modal-metarow" id="seer-modal-metarow"></div>
+                        <div class="seer-chips-row" id="seer-modal-chips"></div>
+                        <div class="seer-specs-ribbon" id="seer-modal-specs"></div>
+                        <div class="seer-version-bar" id="seer-version-bar" style="display:none;"></div>
+                        <div class="seer-synopsis-box">
+                            <div class="seer-synopsis-head">Trama / Sinossi</div>
+                            <p class="seer-synopsis-body clamped" id="seer-modal-overview"></p>
+                            <button class="seer-syn-toggle" id="seer-syn-toggle">Mostra altro</button>
+                        </div>
+                        <div class="seer-text-box" id="seer-modal-text"></div>
+                        <details class="seer-mediainfo" id="seer-mediainfo-wrap">
+                            <summary>🔬 Dettagli tecnici e MediaInfo</summary>
+                            <div class="seer-raw-box" id="seer-modal-raw"></div>
+                            <pre id="seer-mediainfo-pre"></pre>
+                        </details>
                     </div>
-                    <div class="seer-synopsis-box">
-                        <div class="seer-synopsis-head">Trama / Sinossi</div>
-                        <p class="seer-synopsis-body" id="seer-modal-overview"></p>
+                    <div class="seer-modal-foot">
+                        <div class="seer-modal-tools" id="seer-modal-tools"></div>
+                        <div class="seer-magnet-box" id="seer-magnet-box">
+                            <button class="seer-action-btn" id="seer-send-all-btn" style="display:none;"><span>⬇️</span> Invia Tutti</button>
+                            <div class="seer-magnet-list" id="seer-magnet-list"></div>
+                        </div>
+                        <button class="seer-action-btn" id="seer-copy-btn"><span>📋</span> Copia Magnet Link negli Appunti</button>
+                        <button class="seer-action-btn" id="seer-send-btn" style="display:none;"><span>⬇️</span> Invia al client torrent</button>
                     </div>
-                    <div class="seer-text-box" id="seer-modal-text"></div>
-                    <details class="seer-mediainfo" id="seer-mediainfo-wrap" style="display:none;">
-                        <summary>🔬 Mostra MediaInfo Completo</summary>
-                        <pre id="seer-mediainfo-pre"></pre>
-                    </details>
-                    <div class="seer-raw-box" id="seer-modal-raw"></div>
-                    <div class="seer-magnet-box" id="seer-magnet-box">
-                        <button class="seer-action-btn" id="seer-send-all-btn" style="display:none;"><span>⬇️</span> Invia Tutti</button>
-                        <div class="seer-magnet-list" id="seer-magnet-list"></div>
-                    </div>
-                    <button class="seer-action-btn" id="seer-copy-btn"><span>📋</span> Copia Magnet Link negli Appunti</button>
-                    <button class="seer-action-btn" id="seer-send-btn" style="display:none; margin-top:9px;"><span>⬇️</span> Invia al client torrent</button>
                 </div>
             </div>
         </div>
@@ -3721,7 +4490,7 @@ function init() {
                         <div class="seer-set-row">
                             <div class="seer-set-text">
                                 <span class="seer-set-label">Quando premo il pulsante Magnet</span>
-                                <span class="seer-set-sub">"Apri nel client" richiede un client Torrent associato ai link magnet. "Copia tutti" copia sempre negli appunti.</span>
+                                <span class="seer-set-sub">"Apri nel client" richiede un client Torrent associato ai link magnet.</span>
                             </div>
                             <select class="seer-settings-select" id="seer-pref-magnet">
                                 <option value="copy">📋 Copia Magnet negli appunti</option>
@@ -3770,6 +4539,20 @@ function init() {
                     </section>
 
                     <section class="seer-set-group">
+                        <h3 class="seer-set-group-title">📦 Backup configurazione</h3>
+                        <p class="seer-settings-help">
+                            Esporta preferiti, cronologia "scaricati", cartelle di download e preferenze in <code>mirseer_backup.json</code> e ripristinali su un altro browser.
+                            L'importazione unisce preferiti e "scaricati" a quelli esistenti. La chiave TMDb e la password del client torrent <b>non</b> vengono esportate.
+                        </p>
+                        <div class="seer-settings-status" id="seer-backup-status"></div>
+                        <div class="seer-settings-actions">
+                            <button class="seer-action-btn" id="seer-export-btn">📤 Esporta configurazione</button>
+                            <button class="seer-load-btn" id="seer-import-btn">📥 Importa configurazione</button>
+                            <input type="file" id="seer-import-file" accept=".json,application/json" style="display:none;" />
+                        </div>
+                    </section>
+
+                    <section class="seer-set-group">
                         <h3 class="seer-set-group-title">💾 Cache e memoria</h3>
                         <div class="seer-cache-info" id="seer-cache-info"></div>
                         <button class="seer-danger-btn" id="seer-cache-clear">🗑️ Svuota tutta la cache locale</button>
@@ -3793,6 +4576,7 @@ function init() {
     `;
     document.body.appendChild(app);
     updateFavCount();
+    $('seer-sort-select').value = sortMode;
 
     const themeBtn = $('seer-theme-btn');
     let theme = loadTheme();
@@ -3870,6 +4654,7 @@ function init() {
     const sCacheInfo = $('seer-cache-info');
     const sCacheStatus = $('seer-cache-status');
     const sCacheClear = $('seer-cache-clear');
+    const sBackupStatus = $('seer-backup-status');
     const CACHE_BTN_LABEL = '🗑️ Svuota tutta la cache locale';
     const sPathList = $('seer-path-list');
     const buildPathInputs = () => {
@@ -3923,6 +4708,8 @@ function init() {
         sTcStatus.className = 'seer-settings-status';
         sCacheStatus.textContent = '';
         sCacheStatus.className = 'seer-settings-status';
+        sBackupStatus.textContent = '';
+        sBackupStatus.className = 'seer-settings-status';
         updateCacheInfo();
     }
 
@@ -3973,6 +4760,104 @@ function init() {
             sTcStatus.className = 'seer-settings-status err';
         }
         sTcTest.disabled = tcClient() === 'off';
+    };
+
+    // --- Backup: esporta / importa configurazione (JSON) ---
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser'];
+    const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
+
+    $('seer-export-btn').onclick = () => {
+        try {
+            const data = {};
+            BACKUP_KEYS.forEach(k => { const v = getPref(k, undefined); if (v !== undefined) data[k] = v; });
+            const payload = { app: 'MirSeer', schema: 1, version: '1.3', exportedAt: new Date().toISOString(), data };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mirseer_backup.json';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 4000);
+            setBackupStatus('✅ Backup esportato: mirseer_backup.json', 'ok');
+            toast('Configurazione esportata', 'ok');
+        } catch (e) {
+            setBackupStatus('❌ Esportazione non riuscita', 'err');
+        }
+    };
+
+    function importConfig(obj) {
+        if (!obj || typeof obj !== 'object' || (obj.app && obj.app !== 'MirSeer')) throw new Error('File non valido');
+        const d = (obj.data && typeof obj.data === 'object') ? obj.data : obj;
+        const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+        const isStr = v => typeof v === 'string';
+        const sameOrigin = u => { try { const x = new URL(u, location.href); return /^https?:$/.test(x.protocol) && x.origin === location.origin; } catch (e) { return false; } };
+        let n = 0, favN = 0, seenN = 0;
+
+        if (isObj(d.favs)) {
+            Object.keys(d.favs).forEach(id => {
+                const f = d.favs[id];
+                if (!isObj(f) || !isStr(f.url) || !isStr(f.rawTitle) || !sameOrigin(f.url)) return;
+                favs[String(id)] = {
+                    id: String(f.id || id), url: absUrl(f.url), rawTitle: f.rawTitle.slice(0, 400), type: isStr(f.type) ? f.type : 'Film',
+                    views: +f.views || 0, replies: +f.replies || 0, ts: +f.ts || 0, lastReplyTs: +f.lastReplyTs || 0,
+                    author: isStr(f.author) ? f.author : '', authorId: isStr(f.authorId) ? f.authorId : null,
+                    forumId: isStr(f.forumId) ? f.forumId : null, forumName: isStr(f.forumName) ? f.forumName : '', added: +f.added || Date.now()
+                };
+                favN++;
+            });
+            setPref('favs', favs);
+            n++;
+        }
+        if (Array.isArray(d.seen)) {
+            d.seen.forEach(x => { if (typeof x === 'string' || typeof x === 'number') { seenSet.add(String(x)); seenN++; } });
+            persistSeen();
+            n++;
+        }
+        if (isObj(d.tcPaths)) {
+            const p = {};
+            Object.keys(d.tcPaths).forEach(k => { if (isStr(d.tcPaths[k]) && d.tcPaths[k].trim()) p[k] = d.tcPaths[k].trim(); });
+            setPref('tcPaths', p);
+            n++;
+        }
+        if (d.theme === 'light' || d.theme === 'dark') { theme = d.theme; saveTheme(theme); applyTheme(theme); n++; }
+        if (typeof d.heroEnabled === 'boolean') { settings.heroEnabled = d.heroEnabled; setPref('heroEnabled', d.heroEnabled); n++; }
+        if (HERO_SPEEDS.includes(Number(d.heroSpeed))) { settings.heroSpeed = Number(d.heroSpeed); setPref('heroSpeed', settings.heroSpeed); n++; }
+        if (isStr(d.startView) && d.startView.length < 80) { settings.startView = d.startView; setPref('startView', d.startView); n++; }
+        if (d.magnetAction === 'copy' || d.magnetAction === 'open') { settings.magnetAction = d.magnetAction; setPref('magnetAction', d.magnetAction); n++; }
+        if (d.viewMode === 'grid' || d.viewMode === 'list') { viewMode = d.viewMode; setPref('viewMode', viewMode); n++; }
+        if (typeof d.hideSeen === 'boolean') { hideSeen = d.hideSeen; setPref('hideSeen', hideSeen); n++; }
+        if (SORT_MODES.includes(d.sortMode)) { sortMode = d.sortMode; setPref('sortMode', sortMode); $('seer-sort-select').value = sortMode; n++; }
+        if (d.tcClient === 'off' || TC_NAMES[d.tcClient]) { setPref('tcClient', d.tcClient); n++; }
+        if (isStr(d.tcUrl)) { setPref('tcUrl', d.tcUrl.trim()); n++; }
+        if (isStr(d.tcUser)) { setPref('tcUser', d.tcUser); n++; }
+        trSid = null;
+
+        if (!n) throw new Error('Nessun dato riconosciuto nel file');
+        updateFavCount();
+        syncSettingsUI();
+        applyHeroPrefs();
+        refreshMagnetButtons();
+        if (main.loaded || view.key === 'favs') renderDeck(localFilterValue());
+        return { favN, seenN };
+    }
+
+    $('seer-import-btn').onclick = () => $('seer-import-file').click();
+    $('seer-import-file').onchange = async e => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+            if (file.size > 8 * 1024 * 1024) throw new Error('File troppo grande');
+            const obj = JSON.parse(await file.text());
+            const r = importConfig(obj);
+            setBackupStatus(`✅ Configurazione importata (${r.favN} preferiti, ${r.seenN} scaricati).`, 'ok');
+            toast('Configurazione importata', 'ok');
+        } catch (err) {
+            setBackupStatus('❌ ' + ((err && err.message) || 'Importazione non riuscita'), 'err');
+        }
     };
 
     let cacheArm = null;
@@ -4074,9 +4959,12 @@ function init() {
 
     // --- Modale dettaglio ---
     const overlay = $('seer-modal-overlay');
-    const closeModal = () => { overlay.style.display = 'none'; };
+    const closeModal = hideModal;
     $('seer-modal-close-btn').onclick = closeModal;
-    overlay.onclick = e => { if (e.target === overlay) closeModal(); };
+    overlay.onclick = e => {
+        if (e.target === overlay) { closeModal(); return; }
+        if (!e.target.closest('.seer-ext-wrap')) { const m = $('seer-ext-menu'); if (m) m.classList.remove('open'); }
+    };
 
     $('seer-modal-tools').onclick = e => {
         const b = e.target.closest('[data-act]');
@@ -4085,6 +4973,42 @@ function init() {
         if (b.dataset.act === 'fav') toggleFav(it);
         else if (b.dataset.act === 'seen') { markSeen(it, !isSeen(it.id)); toast(isSeen(it.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
         else if (b.dataset.act === 'trailer') openTrailer(it);
+        else if (b.dataset.act === 'ext') { const m = $('seer-ext-menu'); if (m) m.classList.toggle('open'); }
+    };
+
+    // Badge releaser -> vista autore
+    $('seer-modal-metarow').onclick = e => {
+        const b = e.target.closest('[data-act="releaser"]');
+        if (!b || !currentModalItem) return;
+        const it = currentModalItem;
+        openReleaser(it.author, it.authorId, it.authorAvatar);
+    };
+
+    // Selettore versioni: scambia MediaInfo, specifiche e magnet
+    $('seer-version-bar').onclick = e => {
+        const b = e.target.closest('[data-vid]');
+        if (!b) return;
+        const v = modalVersions.find(x => String(x.id) === b.dataset.vid);
+        if (v && v !== currentModalItem) openDetailModal(v, true);
+    };
+
+    // Sinossi: Mostra altro / Mostra meno
+    $('seer-syn-toggle').onclick = () => {
+        const ov = $('seer-modal-overview'), tg = $('seer-syn-toggle');
+        const open = ov.dataset.open !== '1';
+        ov.dataset.open = open ? '1' : '0';
+        ov.classList.toggle('clamped', !open);
+        tg.textContent = open ? 'Mostra meno' : 'Mostra altro';
+    };
+
+    // --- Pannello releaser ---
+    $('seer-rel-panel').onclick = e => {
+        const c = e.target.closest('[data-rcat]');
+        if (c && rel) { rel.cat = c.dataset.rcat; renderDeck(localFilterValue()); return; }
+        if (e.target.closest('[data-rel="back"]')) {
+            const p = (rel && rel.prev) || { key: 'home', section: null };
+            setView(p.key, p.section);
+        }
     };
 
     // --- Trailer ---
@@ -4166,12 +5090,14 @@ function init() {
 
     $('seer-load-more-btn').onclick = () => {
         if (search.active) loadMoreSearch();
+        else if (view.key === 'releaser') loadMoreReleaser();
         else if (view.key === 'section') loadMoreSection();
         else loadMorePages();
     };
 
     $('seer-sort-select').onchange = e => {
-        sortMode = e.target.value;
+        sortMode = SORT_MODES.includes(e.target.value) ? e.target.value : 'recent';
+        setPref('sortMode', sortMode);
         renderDeck(localFilterValue());
     };
 
@@ -4191,17 +5117,31 @@ function init() {
         const b = e.target.closest('.seer-facet');
         if (!b) return;
         const f = b.dataset.facet, t = b.dataset.ftype, fm = b.dataset.fmt;
+        if (f === 'adv') { advOpen = !advOpen; renderFacets(); updateAdv(); return; }
         if (t) filters.type = filters.type === t ? 'all' : t;
         else if (fm) filters.fmt = filters.fmt === fm ? 'all' : fm;
         else if (f === 'reset') {
-            filters.q4k = filters.hdr = filters.ita = filters.complete = false;
-            filters.type = 'all';
-            filters.fmt = 'all';
+            Object.assign(filters, newFilters());
             if (hideSeen) { hideSeen = false; setPref('hideSeen', false); }
         } else if (f === 'hideSeen') { hideSeen = !hideSeen; setPref('hideSeen', hideSeen); }
         else if (f in filters) filters[f] = !filters[f];
         renderDeck(localFilterValue());
     };
+
+    // --- Filtri avanzati (valutazione, anno, releaser, codec) ---
+    const rerenderSoon = (() => {
+        let t = null;
+        return () => { clearTimeout(t); t = setTimeout(() => renderDeck(localFilterValue()), 160); };
+    })();
+    $('seer-adv-vote').oninput = e => {
+        filters.minVote = parseFloat(e.target.value) || 0;
+        $('seer-adv-vote-val').textContent = filters.minVote > 0 ? filters.minVote.toFixed(1) + '+' : 'Tutte';
+        rerenderSoon();
+    };
+    $('seer-adv-yfrom').oninput = e => { filters.yFrom = parseInt(e.target.value, 10) || null; rerenderSoon(); };
+    $('seer-adv-yto').oninput = e => { filters.yTo = parseInt(e.target.value, 10) || null; rerenderSoon(); };
+    $('seer-adv-rel').oninput = e => { filters.releaser = e.target.value.trim(); rerenderSoon(); };
+    $('seer-adv-codec').onchange = e => { filters.codec = e.target.value || 'all'; renderDeck(localFilterValue()); };
 
     const searchInput = $('seer-search-input');
     let searchTimer = null;
@@ -4214,7 +5154,7 @@ function init() {
             exitSearchMode();
             return;
         }
-        if (!search.active) renderDeck(q);
+        if (!search.active) renderDeck(q);          // subito: ricerca fuzzy locale tollerante ai refusi
         searchTimer = setTimeout(() => runSearch(q), 700);
     };
 
@@ -4279,6 +5219,7 @@ function init() {
     });
 
     renderFacets();
+    updateAdv();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
