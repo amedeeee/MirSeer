@@ -30,6 +30,8 @@ const HERO_MAX_TOTAL = 100;
 const PAGE_SIZE = 25;
 const INITIAL_PAGES = 3;          // buffer iniziale: start=0, 25, 50 (anti-bump)
 const NET_GAP = 350;              // pausa minima (ms) tra richieste a viewforum/search (anti flood phpBB)
+const AUTO_MIN = 12;              // sotto questo numero di risultati con filtri attivi, carica altre pagine
+const AUTO_PAGES_MAX = 6;         // massimo pagine caricate automaticamente per volta
 const IMG_HI_COUNT = 8;
 
 const EXCLUDE_SELECTOR = '#recent-topics, .recent-topics, .recenttopics, [class*="recent_topics"], [class*="active-topics"], [id*="active-topics"]';
@@ -1222,6 +1224,9 @@ let sidebarLoaded = false, sidebarReady = false;
 let lastBaseCount = 0;
 let lastBase = [];
 let advOpen = false;
+const newGx = () => ({ key: '', name: '', items: [], nextUrl: null, exhausted: true, loading: false, mode: 'author' });
+let gx = newGx();                 // risultati "globali" del filtro releaser
+let autoBusy = false;
 
 const iconFor = name => { const s = sectionList.find(x => x.name === name); return s ? s.ico : '📁'; };
 const typeIcon = item => iconFor(item.type);
@@ -3699,6 +3704,75 @@ async function loadMoreReleaser() {
 // =====================================================================
 //  LISTA / RENDER
 // =====================================================================
+// =====================================================================
+//  FILTRI GLOBALI: releaser via ricerca sul forum + caricamento automatico pagine
+// =====================================================================
+const GX_VIEWS = ['home', 'films', 'series', 'section'];
+const gxKey = () => (filters.releaser || '').trim().toLowerCase() + '|' + currentScope().fids.join(',');
+const gxApplies = () => !search.active && GX_VIEWS.includes(view.key)
+    && (filters.releaser || '').trim().length >= 3 && gx.key === gxKey();
+
+const relAuthorUrl = (name, fids) =>
+    `/search.php?keywords=&author=${encodeURIComponent(name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
+    fids.map(id => `&f[]=${id}&fid[]=${id}`).join('') + `&submit=Cerca`;
+
+async function loadGxPage() {
+    const g = gx;
+    if (g.loading || g.exhausted) return;
+    g.loading = true;
+    try {
+        const sc = currentScope();
+        const url = g.nextUrl || (g.mode === 'author' ? relAuthorUrl(g.name, sc.fids) : buildSearchUrl(g.name, sc.fids));
+        const page = await fetchSearchPage(url, sc);
+        if (gx !== g) return;
+        if (page.flood) { toast('⏳ Limite frequenza ricerche del forum: riprova tra qualche secondo', 'warn', 4000); g.exhausted = true; return; }
+        g.items = uniqById([...g.items, ...page.items]);
+        g.nextUrl = page.nextUrl;
+        if (!page.nextUrl) {
+            // nessun autore con quel nome: prova come tag crew nel titolo della release
+            if (g.mode === 'author' && !g.items.length) { g.mode = 'title'; g.nextUrl = null; }
+            else g.exhausted = true;
+        }
+    } catch (e) {
+        console.error('Global releaser search failed', e);
+        g.exhausted = true;
+    } finally {
+        g.loading = false;
+        if (gx === g && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue());
+    }
+}
+
+let gxTimer = null;
+function gxStart() {
+    clearTimeout(gxTimer);
+    gxTimer = setTimeout(() => {
+        const name = (filters.releaser || '').trim();
+        if (name.length < 3 || search.active || !GX_VIEWS.includes(view.key)) { gx = newGx(); return; }
+        const key = gxKey();
+        if (gx.key === key) return;
+        const g = gx = { ...newGx(), key, name, exhausted: false };
+        (async () => { for (let i = 0; i < 2 && gx === g && !g.exhausted; i++) await loadGxPage(); })();
+    }, 600);
+}
+
+// Con filtri attivi e pochi risultati, scarica altre pagine del forum finche' non ce ne sono abbastanza
+async function autoPage() {
+    if (autoBusy || search.active || !anyFilter() || !GX_VIEWS.includes(view.key)) return;
+    if (gxApplies() && gx.loading) return;
+    autoBusy = true;
+    try {
+        for (let i = 0; i < AUTO_PAGES_MAX; i++) {
+            if (search.active || !anyFilter() || !GX_VIEWS.includes(view.key)) break;
+            const done = view.key === 'section' ? currentSectionStore().exhausted : main.exhausted;
+            if (done || getVisibleItems().length >= AUTO_MIN) break;
+            if (view.key === 'section') await loadSection(view.section, currentSectionStore());
+            else await loadMoreMain();
+            renderDeck(localFilterValue(), true);
+        }
+    } catch (e) { console.warn('autoPage', e); }
+    finally { autoBusy = false; updateLoadMore(); }
+}
+
 function getVisibleItems() {
     let base;
     if (search.active) base = search.items;
@@ -3709,6 +3783,10 @@ function getVisibleItems() {
         base = main.items;
         if (view.key === 'films') base = base.filter(i => i.type === 'Film');
         if (view.key === 'series') base = base.filter(i => i.type === 'Serie TV');
+    }
+    if (gxApplies()) {
+        const sc = currentScope();
+        base = uniqById([...base, ...gx.items.filter(it => inScope(it, sc))]);
     }
     lastBase = base;
     lastBaseCount = base.length;
@@ -3744,7 +3822,7 @@ function updateLoadMore() {
     else if (view.key === 'favs') { show = false; }
     else if (view.key === 'releaser') { show = !!rel && !rel.exhausted; label = '📥 Carica altre release'; }
     else if (view.key === 'section') { show = !currentSectionStore().exhausted; label = '📥 Carica altri topic'; }
-    else { show = !main.exhausted; }
+    else { show = !main.exhausted || (gxApplies() && !gx.exhausted); }
     btn.style.display = show ? '' : 'none';
     btn.innerText = label;
 }
@@ -3900,7 +3978,7 @@ function fillRow(row, item) {
 
 const groupLabel = it => (it.forumId && forumToSection.get(it.forumId)) || sectionByName(it.forumName) || it.forumName || it.type || 'Altro';
 
-function renderDeck(filterQuery = '') {
+function renderDeck(filterQuery = '', noAuto = false) {
     cancelQueued();
     const listContainer = $('seer-main-list');
     listContainer.innerHTML = '';
@@ -3919,6 +3997,7 @@ function renderDeck(filterQuery = '') {
         else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
         else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita corrisponde ai filtri attivi. Prova ad azzerarli o a caricare altre uscite.');
         else showListMessage('Nessuna uscita da mostrare qui.');
+        if (!noAuto) setTimeout(autoPage, 0);
         warmRatings(lastBase);
         return;
     }
@@ -3956,6 +4035,7 @@ function renderDeck(filterQuery = '') {
     } else {
         displayed.forEach(addRow);
     }
+    if (!noAuto) setTimeout(autoPage, 0);
     warmRatings(lastBase);
 }
 
@@ -3967,6 +4047,8 @@ const localFilterValue = () => {
 async function setView(key, section = null) {
     const token = ++viewToken;
     rel = null;
+    gx = newGx();
+    if (filters.releaser) gxStart();
 
     if (search.active) {
         searchToken++;
@@ -5088,9 +5170,10 @@ function init() {
         markSeen(currentModalItem, true);
     };
 
-    $('seer-load-more-btn').onclick = () => {
+    $('seer-load-more-btn').onclick = async () => {
         if (search.active) loadMoreSearch();
         else if (view.key === 'releaser') loadMoreReleaser();
+        else if (gxApplies() && !gx.exhausted) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; await loadGxPage(); updateLoadMore(); }
         else if (view.key === 'section') loadMoreSection();
         else loadMorePages();
     };
@@ -5121,6 +5204,7 @@ function init() {
         if (t) filters.type = filters.type === t ? 'all' : t;
         else if (fm) filters.fmt = filters.fmt === fm ? 'all' : fm;
         else if (f === 'reset') {
+            gx = newGx();
             Object.assign(filters, newFilters());
             if (hideSeen) { hideSeen = false; setPref('hideSeen', false); }
         } else if (f === 'hideSeen') { hideSeen = !hideSeen; setPref('hideSeen', hideSeen); }
@@ -5140,7 +5224,7 @@ function init() {
     };
     $('seer-adv-yfrom').oninput = e => { filters.yFrom = parseInt(e.target.value, 10) || null; rerenderSoon(); };
     $('seer-adv-yto').oninput = e => { filters.yTo = parseInt(e.target.value, 10) || null; rerenderSoon(); };
-    $('seer-adv-rel').oninput = e => { filters.releaser = e.target.value.trim(); rerenderSoon(); };
+    $('seer-adv-rel').oninput = e => { filters.releaser = e.target.value.trim(); rerenderSoon(); gxStart(); };
     $('seer-adv-codec').onchange = e => { filters.codec = e.target.value || 'all'; renderDeck(localFilterValue()); };
 
     const searchInput = $('seer-search-input');
