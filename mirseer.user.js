@@ -460,6 +460,31 @@ GM_addStyle(`
 }
 `);
 
+GM_addStyle(`
+.seer-hero-arrow {
+    width: 46px; height: 46px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.04));
+    border: 1px solid rgba(255,255,255,0.22);
+    backdrop-filter: blur(12px) saturate(1.4); -webkit-backdrop-filter: blur(12px) saturate(1.4);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.25);
+    opacity: 0; transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+#seer-hero:hover .seer-hero-arrow { opacity: 1; }
+.seer-hero-arrow svg { width: 20px; height: 20px; stroke: #fff; fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
+.seer-hero-arrow:hover {
+    background: linear-gradient(135deg, #6366f1, #a855f7);
+    border-color: transparent;
+    transform: translateY(-50%) scale(1.12);
+    box-shadow: 0 10px 30px rgba(99,102,241,0.6);
+}
+.seer-hero-arrow.next:hover svg { transform: translateX(2px); }
+.seer-hero-arrow.prev:hover svg { transform: translateX(-2px); }
+.seer-hero-arrow:active { transform: translateY(-50%) scale(0.95); }
+.seer-hero-arrow.prev { left: 18px; }
+.seer-hero-arrow.next { right: 18px; }
+@media (hover: none) { .seer-hero-arrow { opacity: 0.9; } }
+`);
 // Vista griglia, filtri rapidi/avanzati, preferiti, scaricati, trailer, MediaInfo, toast, releaser
 GM_addStyle(`
 .seer-view-toggle { display: inline-flex; border: 1px solid var(--seer-border); border-radius: 9px; overflow: hidden; flex-shrink: 0; }
@@ -2826,7 +2851,7 @@ function renderHero() {
 
     const dots = heroSlides.map((_, i) => `<button class="seer-hero-dot ${i === heroIdx ? 'active' : ''}" data-hero="${i}" aria-label="Slide ${i + 1}"></button>`).join('');
     box.innerHTML = slides +
-        (heroSlides.length > 1 ? `<button class="seer-hero-arrow prev" data-hero="prev" aria-label="Precedente">‹</button><button class="seer-hero-arrow next" data-hero="next" aria-label="Successivo">›</button>` : '') +
+        (heroSlides.length > 1 ? `<button class="seer-hero-arrow prev" data-hero="prev" aria-label="Precedente"><svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg></button><button class="seer-hero-arrow next" data-hero="next" aria-label="Successivo"><svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg></button>` : '') +
         `<div class="seer-hero-dots">${dots}</div>`;
 }
 
