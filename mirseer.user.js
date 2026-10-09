@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4
+// @version      1.4.1
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -15,20 +15,19 @@
 // @connect      api.themoviedb.org
 // @connect      image.tmdb.org
 // @connect      *
-// @downloadURL  https://raw.githubusercontent.com/amedeeee/MirSeer/main/mirseer.user.js
-// @updateURL    https://raw.githubusercontent.com/amedeeee/MirSeer/main/mirseer.user.js
 // @run-at       document-end
 // ==/UserScript==
 
 (function () {
 'use strict';
 
+const IS_COARSE = (() => { try { return window.matchMedia('(pointer: coarse)').matches; } catch (e) { return false; } })();
 const HERO_COUNT = 7;
 const HERO_POOL = 14;
 const HERO_MAX_TOTAL = 100;
 
 const PAGE_SIZE = 25;
-const INITIAL_PAGES = 3;          // buffer iniziale: start=0, 25, 50 (anti-bump)
+const INITIAL_PAGES = IS_COARSE ? 2 : 3;          // buffer iniziale: start=0, 25, 50 (anti-bump)
 const NET_GAP = 350;              // pausa minima (ms) tra richieste a viewforum/search (anti flood phpBB)
 const AUTO_MIN = 12;              // sotto questo numero di risultati con filtri attivi, carica altre pagine
 const AUTO_PAGES_MAX = 6;         // massimo pagine caricate automaticamente per volta
@@ -995,7 +994,7 @@ const FREQ_KEY = CACHE_PREFIX + 'imgfreq';
 const FILM_FORUM_ID = 26;
 const SERIES_FORUM_ID = 28;
 
-const MAX_CONCURRENT = 6;
+const MAX_CONCURRENT = IS_COARSE ? 3 : 6;
 const CANCELLED = Symbol('cancelled');
 const THANKS_SELECTOR = 'a[href*="thanks="], a[href*="action=thanks"], a[title*="Grazie"], a[title*="Thanks"], .thanks-icon a';
 const SIDE_HIDE_RE = /\b(richiest|regolament|segnalaz|comunicat|annunc|off[\s._-]*topic|presentaz|cestin|archiv|faq|guid|tutorial|staff|reseed)/i;
@@ -1376,7 +1375,7 @@ function workerCall(op, payload) {
 }
 
 const sectionList = SECTIONS.map(s => ({ ...s }));
-const forumToSection = new Map([[String(FILM_FORUM_ID), 'Film'], [String(SERIES_FORUM_ID), 'Serie TV']]);
+const forumToSection = new Map(SECTIONS.filter(s => s.fid).map(s => [String(s.fid), s.name]));
 const registry = new Map();
 const main = { items: [], group: null, loaded: false, exhausted: false };
 const sections = new Map();
@@ -1550,7 +1549,7 @@ const HERO_SPEEDS = [5000, 10000, 0];
 const SORT_MODES = ['recent', 'activity', 'views', 'title', 'replies', 'size'];
 const settings = {
     heroEnabled: !!getPref('heroEnabled', true),
-    heroSpeed: (v => (HERO_SPEEDS.includes(v) ? v : 5000))(Number(getPref('heroSpeed', 5000))),
+    heroSpeed: (v => (HERO_SPEEDS.includes(v) ? v : 5000))(Number(getPref('heroSpeed', IS_COARSE ? 0 : 5000))),
     startView: String(getPref('startView', 'home')),
     density: getPref('density', 'comfortable') === 'compact' ? 'compact' : 'comfortable',
     accent: String(getPref('accent', '#6366f1')),
@@ -1560,7 +1559,7 @@ const settings = {
 sortMode = (v => (SORT_MODES.includes(v) ? v : 'recent'))(getPref('sortMode', 'recent'));
 
 // ---- Vista (lista / griglia), filtri rapidi, "scaricati" e preferiti ----
-let viewMode = getPref('viewMode', 'list') === 'grid' ? 'grid' : 'list';
+let viewMode = getPref('viewMode', IS_COARSE ? 'grid' : 'list') === 'grid' ? 'grid' : 'list';
 let hideSeen = !!getPref('hideSeen', false);
 const newFilters = () => ({ q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all', sizeMin: null, sizeMax: null, genre: 'all' });
 const filters = newFilters();
@@ -2041,7 +2040,7 @@ async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackTyp
         seen.add(topicId);
         rawCount++;
 
-        if (relaxed ? !isReleaseInSection(raw) : !isMovieOrSeries(raw)) return;
+        if (!isReleaseInSection(raw)) return;
 
         const num = sel => {
             const el = row && row.querySelector(sel);
@@ -2091,7 +2090,7 @@ async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackTyp
                 const meta = metas[i];
                 let type;
                 if (auto) type = (rec.forumId && forumToSection.get(rec.forumId)) || sectionByName(rec.forumName) || fallbackType || rec.forumName || (meta.isTvSeries ? 'Serie TV' : 'Film');
-                else type = generic ? ((defaultType === 'Serie TV' || meta.isTvSeries) ? 'Serie TV' : 'Film') : defaultType;
+                else type = defaultType;
                 item = buildItem({ ...rec, type, meta });
                 registry.set(rec.topicId, item);
                 hydrateSync(item);
@@ -5398,6 +5397,245 @@ GM_addStyle(`
 // =====================================================================
 //  INIT
 // =====================================================================
+GM_addStyle(`
+/* MIRSEER-MOBILE-PATCH */
+html.seer-lock, body.seer-lock { overflow: hidden !important; }
+#mirseer-app, .seer-modal-scroll, .seer-settings-window, .seer-sidebar,
+.seer-magnet-list, .seer-text-box, .seer-mediainfo pre { overscroll-behavior: contain; }
+
+/* Safe areas (notch / gesture bar) */
+#mirseer-fab { bottom: calc(24px + env(safe-area-inset-bottom, 0px)) !important; right: calc(24px + env(safe-area-inset-right, 0px)) !important; }
+#seer-toasts { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+#seer-batch-bar { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+.seer-modal-foot { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+
+/* Sidebar backdrop */
+#seer-side-backdrop { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: var(--seer-nav-h); background: rgba(0,0,0,.55); z-index: 190; }
+
+/* Dynamic viewport units (address bar aware) */
+@supports (height: 100dvh) {
+    .seer-sidebar { max-height: calc(100dvh - var(--seer-nav-h)); }
+    .seer-detail-window.is-portrait, .seer-detail-window:not(.is-landscape) { max-height: 92dvh; }
+    .seer-detail-window.is-landscape { max-height: 92dvh; }
+    .seer-settings-window { max-height: 85dvh; }
+}
+
+@media (max-width: 980px) {
+    #seer-side-backdrop.show { display: block; }
+    .seer-sidebar { max-height: none; padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
+    #seer-hero { height: 360px; }
+    .seer-hero-body { padding: 24px 20px 40px; }
+    .seer-hero-title { font-size: 24px; }
+    .seer-hero-desc { -webkit-line-clamp: 3; font-size: 14px; }
+}
+
+/* Two-row nav bar on phones */
+@media (max-width: 760px) {
+    :root { --seer-nav-h: calc(104px + env(safe-area-inset-top, 0px)); }
+    .seer-nav { flex-wrap: wrap; align-content: center; gap: 8px; padding: env(safe-area-inset-top, 0px) 12px 0; }
+    .seer-nav > div:first-child { flex: 1 1 auto; order: 0; }
+    .seer-nav > div:nth-child(2) { display: contents !important; }
+    .seer-brand > span { display: none; }
+    .seer-user { order: 1; }
+    #seer-settings-btn { order: 2; }
+    #seer-theme-btn { order: 3; }
+    #seer-exit { order: 4; }
+    .seer-nav .seer-search-wrap { order: 10; flex: 1 1 100%; max-width: none; }
+}
+
+@media (max-width: 820px) {
+    /* Detail modal = full-screen sheet */
+    #seer-modal-overlay { padding: 0; }
+    .seer-detail-window, .seer-detail-window.is-landscape, .seer-detail-window.is-portrait {
+        max-width: none !important; width: 100% !important; height: 100vh !important; max-height: 100vh !important;
+        border-radius: 0 !important; border: none !important;
+    }
+    .seer-detail-window .seer-modal-left { height: 120px !important; }
+    .seer-detail-window .seer-modal-close { top: calc(12px + env(safe-area-inset-top, 0px)); }
+    .seer-modal-tools { gap: 6px; }
+    .seer-magnet-box.show { grid-template-columns: 1fr; }
+    .seer-magnet-box .seer-magnet-list { max-height: 96px; }
+    .seer-ext-menu { left: 0; right: auto; max-width: calc(100vw - 32px); }
+
+    /* Settings = full-screen */
+    #seer-settings-overlay { padding: 0; }
+    .seer-settings-window { max-width: none; height: 100vh; max-height: 100vh; border-radius: 0; }
+    .seer-settings-select { width: 100%; min-width: 0; }
+
+    /* Filters: single horizontally scrollable rows */
+    .seer-facets, .seer-rl-head {
+        flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+        margin-left: -14px; margin-right: -14px; padding: 0 14px 4px;
+    }
+    .seer-facets::-webkit-scrollbar, .seer-rl-head::-webkit-scrollbar { display: none; }
+    .seer-facets > *, .seer-rl-head > * { flex-shrink: 0; white-space: nowrap; }
+
+    /* Advanced filters stacked */
+    .seer-adv.open { flex-direction: column; align-items: stretch; gap: 12px; }
+    .seer-adv-item { width: 100%; justify-content: space-between; }
+    .seer-adv input[type=range] { flex: 1; width: auto; min-width: 0; }
+    .seer-adv-input, .seer-adv-input.wide, .seer-adv select.seer-adv-input { flex: 1; width: auto; min-width: 0; }
+
+    /* Batch bar: one scrollable row */
+    #seer-batch-bar {
+        left: 8px; right: 8px; transform: none; max-width: none; flex-wrap: nowrap; overflow-x: auto;
+        justify-content: flex-start; scrollbar-width: none;
+    }
+    #seer-batch-bar::-webkit-scrollbar { display: none; }
+    #seer-batch-bar > * { flex-shrink: 0; white-space: nowrap; }
+}
+
+@media (max-width: 560px) {
+    .seer-row:not(.is-card) { padding: 8px 10px; gap: 10px; }
+    .seer-row:not(.is-card) .seer-right-meta { display: none; }
+    .seer-row:not(.is-card) .seer-title {
+        white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .seer-list.seer-grid { grid-template-columns: repeat(auto-fill, minmax(min(150px, 44vw), 1fr)); }
+}
+
+/* Touch devices */
+@media (pointer: coarse) {
+    #mirseer-app * { -webkit-tap-highlight-color: transparent; }
+    #mirseer-app button, #mirseer-app a, #mirseer-app .seer-row, #mirseer-app select { touch-action: manipulation; }
+    #mirseer-app input, #mirseer-app select, #mirseer-app textarea { font-size: 16px !important; }
+    .seer-facet, .seer-tool-btn, .seer-ver-tab, .seer-magnet-copy, .seer-meta-pill, .seer-load-btn, .seer-exit-btn { min-height: 40px; }
+    .seer-fav-btn, .seer-modal-close, .seer-menu-btn, .seer-theme-btn, .seer-user-btn { width: 40px; height: 40px; }
+    .seer-side-item { min-height: 44px; }
+    .seer-row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+    /* Cheaper rendering on mobile GPUs */
+    .seer-nav, #seer-modal-overlay, #seer-settings-overlay, .seer-hero-arrow, .seer-modal-close,
+    .seer-modal-nav, .seer-is-card .seer-fav-btn, .is-card .seer-fav-btn {
+        backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+    }
+    #mirseer-app:not(.seer-light) .seer-hero-bg.blur { filter: blur(12px) brightness(0.55) saturate(1.2); transform: scale(1.15); }
+    #mirseer-app.seer-light .seer-hero-bg.blur { filter: blur(12px) brightness(1.08) saturate(1.1); transform: scale(1.15); }
+}
+
+/* No sticky hover effects on touch */
+@media (hover: none) {
+    #mirseer-app .seer-row:hover, #mirseer-app .seer-row.is-card:hover { transform: none; box-shadow: none; }
+    #mirseer-app .seer-rl-card:hover, #mirseer-app .seer-fav-btn:hover, #mirseer-app .seer-modal-close:hover { transform: none; }
+    #mirseer-app .seer-action-btn:hover, #mirseer-app .seer-hero-btn.primary:hover { transform: none; }
+    #mirseer-fab:hover { transform: none; }
+}
+`);
+
+// ===== MIRSEER-MOBILE-PATCH: comportamenti mobile =====
+function mobileEnhance() {
+    const app = $('mirseer-app');
+    if (!app) return;
+
+    // viewport-fit=cover, needed for env(safe-area-inset-*) to work
+    try {
+        const mv = document.querySelector('meta[name="viewport"]');
+        if (mv && !/viewport-fit/i.test(mv.content)) mv.content += ', viewport-fit=cover';
+    } catch (e) {}
+
+    // Lock the forum page while MirSeer is open
+    const lockPage = () => {
+        const open = app.style.display === 'block';
+        document.documentElement.classList.toggle('seer-lock', open);
+        document.body.classList.toggle('seer-lock', open);
+    };
+    new MutationObserver(lockPage).observe(app, { attributes: true, attributeFilter: ['style'] });
+    lockPage();
+
+    // Sidebar backdrop (tap outside closes the drawer)
+    const sb = $('seer-sidebar');
+    const bd = document.createElement('div');
+    bd.id = 'seer-side-backdrop';
+    app.appendChild(bd);
+    bd.onclick = () => sb.classList.remove('open');
+    new MutationObserver(() => bd.classList.toggle('show', sb.classList.contains('open')))
+        .observe(sb, { attributes: true, attributeFilter: ['class'] });
+
+    const mobile = IS_COARSE || window.matchMedia('(max-width: 980px)').matches;
+    if (!mobile) return;
+
+    // Android back button closes trailer / settings / modal / drawer instead of leaving the page
+    const layers = [
+        { el: $('seer-trailer-overlay'), isOpen: () => $('seer-trailer-overlay').style.display === 'flex', close: () => closeTrailer(), attr: 'style' },
+        { el: $('seer-settings-overlay'), isOpen: () => $('seer-settings-overlay').style.display === 'flex', close: () => $('seer-settings-close').click(), attr: 'style' },
+        { el: $('seer-modal-overlay'), isOpen: () => $('seer-modal-overlay').style.display === 'flex', close: () => hideModal(), attr: 'style' },
+        { el: sb, isOpen: () => sb.classList.contains('open'), close: () => sb.classList.remove('open'), attr: 'class' }
+    ];
+    let ignorePop = 0;
+    layers.forEach(L => {
+        L.was = L.isOpen();
+        L.pushed = false;
+        new MutationObserver(() => {
+            const now = L.isOpen();
+            if (now === L.was) return;
+            L.was = now;
+            if (now) {
+                try { history.pushState({ seerLayer: 1 }, '', location.href); L.pushed = true; } catch (e) {}
+            } else if (L.pushed) {
+                L.pushed = false;
+                ignorePop++;
+                try { history.back(); } catch (e) { ignorePop--; }
+            }
+        }).observe(L.el, { attributes: true, attributeFilter: [L.attr] });
+    });
+    window.addEventListener('popstate', () => {
+        if (ignorePop > 0) { ignorePop--; return; }
+        const top = layers.find(L => L.isOpen());
+        if (top) { top.pushed = false; top.close(); }
+    });
+
+    // Long-press a row = enter selection mode and select it
+    const list = $('seer-main-list');
+    let lpT = null, lpX = 0, lpY = 0, lpFired = 0;
+    list.addEventListener('touchstart', e => {
+        const row = e.target.closest('.seer-row');
+        if (!row || e.target.closest('.seer-fav-btn') || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        lpX = t.clientX; lpY = t.clientY;
+        clearTimeout(lpT);
+        lpT = setTimeout(() => {
+            const it = registry.get(String(row.dataset.topicId));
+            if (!it) return;
+            lpFired = Date.now();
+            try { if (navigator.vibrate) navigator.vibrate(25); } catch (e) {}
+            if (!selMode) setSelMode(true);
+            toggleSel(it);
+        }, 520);
+    }, { passive: true });
+    const lpCancel = () => clearTimeout(lpT);
+    list.addEventListener('touchmove', e => {
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - lpX) > 10 || Math.abs(t.clientY - lpY) > 10) lpCancel();
+    }, { passive: true });
+    list.addEventListener('touchend', lpCancel, { passive: true });
+    list.addEventListener('touchcancel', lpCancel, { passive: true });
+    list.addEventListener('click', e => {
+        if (Date.now() - lpFired < 700) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    list.addEventListener('contextmenu', e => { if (e.target.closest('.seer-row')) e.preventDefault(); });
+
+    // Swipe on the hero carousel
+    const hero = $('seer-hero');
+    let hx = 0, hy = 0;
+    hero.addEventListener('touchstart', e => { const t = e.changedTouches[0]; hx = t.clientX; hy = t.clientY; }, { passive: true });
+    hero.addEventListener('touchend', e => {
+        const t = e.changedTouches[0], dx = t.clientX - hx, dy = t.clientY - hy;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && heroSlides.length > 1) {
+            goHero(heroIdx + (dx < 0 ? 1 : -1));
+            startHero();
+        }
+    }, { passive: true });
+
+    // One-time hint about swiping between releases in the detail sheet
+    new MutationObserver(() => {
+        if ($('seer-modal-overlay').style.display !== 'flex') return;
+        if (getPref('swipeHint', false)) return;
+        setPref('swipeHint', true);
+        toast('👆 Scorri a sinistra/destra per cambiare release', '', 3600);
+    }).observe($('seer-modal-overlay'), { attributes: true, attributeFilter: ['style'] });
+}
+
 function init() {
     if ($('mirseer-fab')) return;
 
@@ -6562,6 +6800,7 @@ function init() {
 
     renderFacets();
     updateAdv();
+    mobileEnhance();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
