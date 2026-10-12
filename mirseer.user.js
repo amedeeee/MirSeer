@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.1
+// @version      1.4.2
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -17,7 +17,6 @@
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
-
 (function () {
 'use strict';
 
@@ -27,10 +26,10 @@ const HERO_POOL = 14;
 const HERO_MAX_TOTAL = 100;
 
 const PAGE_SIZE = 25;
-const INITIAL_PAGES = IS_COARSE ? 2 : 3;          // buffer iniziale: start=0, 25, 50 (anti-bump)
-const NET_GAP = 350;              // pausa minima (ms) tra richieste a viewforum/search (anti flood phpBB)
-const AUTO_MIN = 12;              // sotto questo numero di risultati con filtri attivi, carica altre pagine
-const AUTO_PAGES_MAX = 6;         // massimo pagine caricate automaticamente per volta
+const INITIAL_PAGES = IS_COARSE ? 2 : 3;
+const NET_GAP = 350;
+const AUTO_MIN = 12;
+const AUTO_PAGES_MAX = 6;
 const IMG_HI_COUNT = 8;
 
 const EXCLUDE_SELECTOR = '#recent-topics, .recent-topics, .recenttopics, [class*="recent_topics"], [class*="active-topics"], [id*="active-topics"]';
@@ -39,6 +38,7 @@ const RECENT_HEAD_RE = /topic\s+attiv|attivi\s+di\s+recente|argomenti\s+attiv|ul
 const SECTIONS = [
     { name: 'Film',           fid: 26, nav: 'films',  ico: '🎬' },
     { name: 'Serie TV',       fid: 28, nav: 'series', ico: '📺' },
+    { name: 'Progetti e Collezioni', fid: 13, sub: true, ico: '🗂️' },
     { name: 'Documentari',    fid: 29,                ico: '🌍' },
     { name: 'TV Show',        fid: 30,                ico: '📡' },
     { name: 'Teatro',         fid: 31,                ico: '🎭' },
@@ -58,6 +58,9 @@ const SECTIONS = [
 const FILE_TYPES = new Set(['EBooks', 'Comics', 'Edicola', 'Games PC']);
 const AUDIO_TYPES = new Set(['ABooks', 'Musica Audio']);
 const VIDEO_TYPES = new Set(['Film', 'Serie TV', 'Documentari', 'TV Show', 'Teatro', 'Videocorsi', 'Anime Movies', 'Anime Series', 'Cartoon Movies', 'Cartoon Series', 'Musica Video']);
+const PROJECT_SECTION = 'Progetti e Collezioni';
+const SEASON_SECTIONS = new Set(['Serie TV', 'TV Show', 'Anime Series', 'Cartoon Series', 'Film e Serie TV']);
+const NO_RATING_SECTIONS = new Set(['Videocorsi', 'Musica Video']);
 
 GM_addStyle(`
 :root {
@@ -480,7 +483,6 @@ GM_addStyle(`
 }
 `);
 
-// Vista griglia, filtri rapidi/avanzati, preferiti, scaricati, trailer, MediaInfo, toast, releaser
 GM_addStyle(`
 .seer-view-toggle { display: inline-flex; border: 1px solid var(--seer-border); border-radius: 9px; overflow: hidden; flex-shrink: 0; }
 .seer-view-toggle button {
@@ -639,7 +641,6 @@ GM_addStyle(`
 }
 `);
 
-// Light-theme overrides: every selector below is automatically prefixed with #mirseer-app.seer-light
 const LIGHT_RULES = `
 .seer-nav{background:rgba(255,255,255,.88);}
 .seer-menu-btn,.seer-exit-btn,.seer-theme-btn{background:rgba(15,23,42,.05);color:#0f172a;}
@@ -753,7 +754,6 @@ const LIGHT_RULES = `
 GM_addStyle(LIGHT_RULES.replace(/(^|\})\s*([^{}]+)\{/g, (m, a, sel) =>
     a + sel.split(',').map(s => '#mirseer-app.seer-light ' + s.trim()).join(',') + '{'));
 
-// Settings modal
 GM_addStyle(`
 #seer-settings-overlay {
     display: none; position: fixed; inset: 0; background: rgba(3,5,9,0.88);
@@ -989,6 +989,11 @@ GM_addStyle(`
 #mirseer-app.seer-light .seer-modal-nav { background: rgba(255,255,255,.85); color: #0f172a; border-color: rgba(15,23,42,.15); }
 `);
 
+GM_addStyle(`
+.seer-adv-genres { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seer-adv-genres:empty { display: none; }
+`);
+
 const CACHE_PREFIX = 'mirseer_v25_';
 const FREQ_KEY = CACHE_PREFIX + 'imgfreq';
 const FILM_FORUM_ID = 26;
@@ -1002,7 +1007,6 @@ const MAIN_SUB_EXCLUDE_RE = /\b(richiest|regolament|music|audio|concert|ebook|so
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-// Relative links must always resolve against the forum root, never against the page we are on (e.g. /releasers/)
 const SITE_ROOT = location.origin + '/';
 const fixUrl = u => String(u || '').replace(/^(https?:\/\/[^\/]+)\/releasers\/(?=(?:viewtopic|viewforum|search|memberlist|ucp|download)\b)/i, '$1/');
 const absHref = a => { try { return fixUrl(new URL(a.getAttribute('href'), SITE_ROOT).href); } catch (e) { return fixUrl(a.href || ''); } };
@@ -1010,7 +1014,6 @@ const absUrl = u => { try { return fixUrl(new URL(u, SITE_ROOT).href); } catch (
 const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Pausa minima tra richieste a viewforum/search/profili: evita il flood limit di phpBB
 let nextNetSlot = 0;
 function netGate() {
     const now = Date.now();
@@ -1019,7 +1022,6 @@ function netGate() {
     return at > now ? sleep(at - now) : Promise.resolve();
 }
 
-// Logo MirSeer (occhio stilizzato) in SVG: nitido a qualsiasi dimensione
 const logoSvg = gid => `<svg class="seer-logo" viewBox="0 0 100 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
         <radialGradient id="${gid}" cx="35%" cy="30%" r="80%">
@@ -1053,11 +1055,6 @@ const fmtViews = n => {
     return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + 'k';
 };
 
-// =====================================================================
-//  NUCLEO "PURO" (nessun accesso al DOM): eseguito sia nel main thread
-//  sia in un Web Worker inline creato da Blob. Una sola sorgente di verita':
-//  il worker riceve il testo di questa stessa funzione (Function.toString).
-// =====================================================================
 function pureCore() {
     const RANGE_SEP = '(?:[-–—+&,~]|\\s+(?:a|e|to)\\s+)';
     const SEASON_RES = {
@@ -1143,13 +1140,14 @@ function pureCore() {
         else if (/\b(dvdrip|dvd)\b/i.test(raw)) source = 'DVDRip';
 
         const audioLangs = [];
-        if (/\b(ita|italian|italiano)\b/i.test(raw)) audioLangs.push('ITA');
-        if (/\b(eng|english|inglese)\b/i.test(raw)) audioLangs.push('ENG');
-        if (/\b(jap|japanese|giapponese)\b/i.test(raw)) audioLangs.push('JAP');
-        if (/\b(fra|fre|french|francese)\b/i.test(raw)) audioLangs.push('FRA');
-        if (/\b(spa|spanish|spagnolo)\b/i.test(raw)) audioLangs.push('SPA');
-        if (/\b(ger|german|tedesco)\b/i.test(raw)) audioLangs.push('GER');
-        if (/\b(multi|multiaudio|dual|dual[\s.-]*audio)\b/i.test(raw) && audioLangs.length === 0) audioLangs.push('MULTI');
+        const rawAudio = raw.replace(/\b(?:sub[\s._-]*(?:ita|eng|fra|spa|ger|multi|forced)|multi[\s._-]*sub)\b/gi, ' ');
+        if (/\b(ita|italian|italiano)\b/i.test(rawAudio)) audioLangs.push('ITA');
+        if (/\b(eng|english|inglese)\b/i.test(rawAudio)) audioLangs.push('ENG');
+        if (/\b(jap|japanese|giapponese)\b/i.test(rawAudio)) audioLangs.push('JAP');
+        if (/\b(fra|fre|french|francese)\b/i.test(rawAudio)) audioLangs.push('FRA');
+        if (/\b(spa|spanish|spagnolo)\b/i.test(rawAudio)) audioLangs.push('SPA');
+        if (/\b(ger|german|tedesco)\b/i.test(rawAudio)) audioLangs.push('GER');
+        if (/\b(multi|multiaudio|dual|dual[\s.-]*audio)\b/i.test(rawAudio) && audioLangs.length === 0) audioLangs.push('MULTI');
 
         let audioCodec = '';
         if (/\b(atmos|dolby[\s.-]*atmos)\b/i.test(raw)) audioCodec = 'Atmos';
@@ -1157,15 +1155,15 @@ function pureCore() {
         else if (/\b(dts-hd[\s.-]*ma|dts-ma)\b/i.test(raw)) audioCodec = 'DTS-HD MA';
         else if (/\b(dts-hd)\b/i.test(raw)) audioCodec = 'DTS-HD';
         else if (/\b(dts)\b/i.test(raw)) audioCodec = 'DTS';
-        else if (/\b(ddp|dd\+|e-?ac3|eac3)\b/i.test(raw)) audioCodec = 'E-AC3';
+        else if (/\b(?:ddp|e-?ac3|eac3)(?![a-z])|\bdd\+/i.test(raw)) audioCodec = 'E-AC3';
         else if (/\b(ac3|dd5\.1|dd2\.0|dolby[\s.-]*digital)\b/i.test(raw)) audioCodec = 'AC3';
         else if (/\b(aac|aac2\.0)\b/i.test(raw)) audioCodec = 'AAC';
         else if (/\b(flac)\b/i.test(raw)) audioCodec = 'FLAC';
 
         let channels = '';
-        if (/\b(7\.1)\b/.test(raw)) channels = '7.1';
-        else if (/\b(5\.1)\b/.test(raw)) channels = '5.1';
-        else if (/\b(2\.0)\b/.test(raw)) channels = '2.0';
+        if (/(?:^|[^\d.])7\.1(?!\d)/.test(raw)) channels = '7.1';
+        else if (/(?:^|[^\d.])5\.1(?!\d)/.test(raw)) channels = '5.1';
+        else if (/(?:^|[^\d.])2\.0(?!\d)/.test(raw)) channels = '2.0';
 
         const audioFormatted = audioLangs.length > 0
             ? `${audioLangs.join('/')}${audioCodec ? ' (' + audioCodec + (channels ? ' ' + channels : '') + ')' : ''}`
@@ -1187,19 +1185,27 @@ function pureCore() {
 
         const season = parseSeasonInfo(raw);
         const isTvSeries = (!!season && season.kind !== 'episode') || /\bserie[\s._]*tv\b|\bepisod/i.test(raw);
-        const yearMatch = raw.match(/\b(19\d\d|20\d\d)\b/);
+        const yearMatch = raw.match(/[(\[]\s*(19\d\d|20\d\d)\s*[)\]]/) || raw.match(/\b(19\d\d|20\d\d)\b/);
         const year = yearMatch ? yearMatch[1] : '';
 
-        let clean = raw.replace(/^\[[^\]]+\]/g, '').replace(/\[.*?\]|\(.*?\)/g, '');
+        let headRaw = raw;
+        if (yearMatch && yearMatch.index > 0) {
+            const head = raw.slice(0, yearMatch.index);
+            if (/[A-Za-z\u00C0-\u00FF0-9]{2}/.test(head)) headRaw = head;
+        }
+        let clean = headRaw.replace(/^\[[^\]]+\]/g, '').replace(/\[.*?\]|\(.*?\)/g, '');
         clean = stripSeasonText(clean)
             .replace(/-MirCrew|-SpyRo|-NovaRip|-TNTVillage|\bMirCrew\b/gi, '')
             .replace(/\b(stagion[ei]|seasons?|completa|complete|pack|in\s*corso|integrale|episodi[oe]?)\b/gi, ' ')
+            .replace(/\b(?:dts-hd[\s.-]*ma|dts-hd|dts-ma|dts)(?:[\s.-]?\d\.\d)?(?!\w)/gi, '')
+            .replace(/\b(?:ddp|dd\+|dd(?=[\s.-]?\d\.\d)|e-?ac3|eac3|ac3|truehd|true-hd|atmos|aac|flac|mp3)(?:[\s.-]?\d\.\d)?(?!\w)/gi, '')
             .replace(/\b(2160p|4k|1080p|1080i|720p|576p|480p|uhd|fhd|hd)\b/gi, '')
             .replace(/\b(remux|uhd[\s.-]*bluray|bluray|bdrip|brrip|web-dl|webdl|webrip|hdtv|dvdrip|dvd)\b/gi, '')
             .replace(/\b(x265|x264|hevc|avc|av1|h\.?264|h\.?265|10bit|10-bit)\b/gi, '')
             .replace(/\b(xvid|divx|sd|pdtv|dsr|hdrip|tvrip|satrip|dvbrip|pir8)\b/gi, '')
-            .replace(/\b(hdr10\+|hdr10|hdr|dolby[\s.-]*vision|dv|sdr)\b/gi, '')
+            .replace(/\b(?:hdr10\+|hdr10plus|hdr10|hdr|dolby[\s.-]*vision|dv|sdr)(?!\w)/gi, '')
             .replace(/\b(dts-hd[\s.-]*ma|dts-hd|dts|truehd|atmos|ddp|eac3|ac3|aac|flac|mp3|5\.1|7\.1|2\.0)\b/gi, '')
+            .replace(/\b(?:amzn|dsnp|atvp|hmax|pcok|hulu|nf)\b/gi, '')
             .replace(/\b(sub[\s._-]*(?:ita|eng|multi|forced)|subita|subeng|multisub|softsub|hardsub)\b/gi, '')
             .replace(/\b(ita|eng|italian|english|japanese|jap|fra|spa|ger|multi|dual)\b/gi, '')
             .replace(/[.\-_]+/g, ' ')
@@ -1207,7 +1213,8 @@ function pureCore() {
             .trim();
 
         const baseTitle = clean || raw;
-        const displayTitle = (isTvSeries && season) ? `${baseTitle} – ${season.label}` : baseTitle;
+        const yearTag = (year && !new RegExp('(?:^|\\D)' + year + '(?!\\d)').test(baseTitle)) ? ' (' + year + ')' : '';
+        const displayTitle = (isTvSeries && season) ? `${baseTitle}${yearTag} – ${season.label}` : baseTitle + yearTag;
 
         return {
             cleanTitle: baseTitle, displayTitle, season, isTvSeries,
@@ -1257,7 +1264,6 @@ function pureCore() {
         return paragraphs.length ? paragraphs[0].slice(0, 900) : null;
     }
 
-    // ---- Campi della scheda nel post (TITOLO ORIGINALE / ANNO / GENERE / PAESE) ----
     const FIELD_RES = {
         orig:    /TITOLO\s*ORIGINALE\s*:\s*([^\n]+)/i,
         year:    /\bANNO\s*:\s*((?:19|20)\d{2})/i,
@@ -1276,7 +1282,6 @@ function pureCore() {
         };
     }
 
-    // ---- MediaInfo ----
     const MEDIAINFO_MARKERS = [/Complete name/i, /Format\s*(?:profile|\/Info|settings)?\s*:/i, /Bit ?rate/i, /Duration/i, /Frame rate/i, /Codec ID/i, /Channel\(s\)/i, /\bWidth\s*:/i, /\bLanguage\s*:/i, /Unique ID/i, /File size/i];
     const looksLikeMediaInfo = t => !!t && MEDIAINFO_MARKERS.reduce((n, re) => n + (re.test(t) ? 1 : 0), 0) >= 3;
 
@@ -1290,7 +1295,6 @@ function pureCore() {
         return null;
     }
 
-    // ---- Dimensione ----
     const SIZE_UNITS = { b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1048576, gib: 1073741824, tib: 1099511627776 };
     const sizeToBytes = (num, unit) => {
         const n = parseFloat(String(num).replace(/\s/g, '').replace(',', '.'));
@@ -1306,15 +1310,15 @@ function pureCore() {
         return { field, mi };
     }
 
-    // Tutto il parsing testuale di un post in un colpo solo (un solo messaggio al worker)
     function processPost(text) {
         const t = text || '';
+        const sz = extractSize(t);
         return {
             fields: parsePostFields(t),
             synopsis: extractSynopsis(t),
             body: stripDividers(t).slice(0, 4000) || null,
             miText: extractMediaInfoText(t),
-            sizeField: extractSize(t).field, sizeMi: extractSize(t).mi
+            sizeField: sz.field, sizeMi: sz.mi
         };
     }
 
@@ -1328,7 +1332,6 @@ function pureCore() {
 const pure = pureCore();
 const { SEASON_RES, parseSeasonInfo, isRealProse, stripDividers, looksLikeMediaInfo } = pure;
 
-// ---- Web Worker inline (Blob + URL.createObjectURL) con fallback sincrono ----
 const WORKER_BODY = 'self.onmessage=function(e){var d=e.data,r;try{if(d.op==="titles")r=d.payload.map(function(t){return core.parseReleaseInfo(t);});else if(d.op==="post")r=core.processPost(d.payload);}catch(err){self.postMessage({id:d.id,error:String(err)});return;}self.postMessage({id:d.id,result:r});};';
 let worker = null, workerOff = false, wSeq = 0;
 const wPending = new Map();
@@ -1381,7 +1384,7 @@ const main = { items: [], group: null, loaded: false, exhausted: false };
 const sections = new Map();
 let view = { key: 'home', section: null };
 let search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
-let rel = null;                       // stato della vista "Releaser"
+let rel = null;
 let sortMode = 'recent';
 let viewToken = 0, searchToken = 0, modalToken = 0;
 let currentTopicUrl = null;
@@ -1393,7 +1396,7 @@ let lastBaseCount = 0;
 let lastBase = [];
 let advOpen = false;
 const newGx = () => ({ key: '', name: '', items: [], nextUrl: null, exhausted: true, loading: false, mode: 'author' });
-let gx = newGx();                 // risultati "globali" del filtro releaser
+let gx = newGx();
 let autoBusy = false;
 let selMode = false;
 const selected = new Set();
@@ -1410,11 +1413,6 @@ const iconFor = name => { const s = sectionList.find(x => x.name === name); retu
 const typeIcon = item => iconFor(item.type);
 const sectionByName = name => { const s = name && sectionList.find(x => x.re && x.re.test(name)); return s ? s.name : null; };
 
-// =====================================================================
-//  CACHE su IndexedDB (con mirror in memoria per letture sincrone)
-//  - lettura sincrona dalla Map in RAM, scrittura asincrona a lotti su IDB
-//  - nessun limite rigido di ~5 MB come localStorage, nessun blocco della UI
-// =====================================================================
 const CACHE_DB = 'mirseer_cache', CACHE_STORE = 'kv', CACHE_MAX = 6000;
 const cacheMem = new Map();
 const wQueue = new Map();
@@ -1489,7 +1487,6 @@ function cacheDel(k) {
     scheduleIdbFlush();
 }
 
-// Rimuove il ~30% delle voci piu' vecchie quando si supera il tetto
 function pruneCache() {
     const entries = [];
     cacheMem.forEach((v, k) => {
@@ -1507,7 +1504,6 @@ function cacheClearAll() {
     dQueue.clear();
     clearTimeout(idbTimer); idbTimer = null;
     try { if (idbDb) idbDb.transaction(CACHE_STORE, 'readwrite').objectStore(CACHE_STORE).clear(); } catch (e) {}
-    // pulizia di eventuali residui delle vecchie versioni su localStorage
     try {
         const del = [];
         for (let i = 0; i < localStorage.length; i++) {
@@ -1518,11 +1514,9 @@ function cacheClearAll() {
     } catch (e) {}
 }
 
-// localStorage resta usato SOLO come fallback per le preferenze quando GM_* non e' disponibile
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
 
-// ---- Preferenze centralizzate: GM_getValue / GM_setValue con fallback su localStorage ----
 function getPref(key, def) {
     try {
         if (typeof GM_getValue === 'function') {
@@ -1558,10 +1552,9 @@ const settings = {
 };
 sortMode = (v => (SORT_MODES.includes(v) ? v : 'recent'))(getPref('sortMode', 'recent'));
 
-// ---- Vista (lista / griglia), filtri rapidi, "scaricati" e preferiti ----
 let viewMode = getPref('viewMode', IS_COARSE ? 'grid' : 'list') === 'grid' ? 'grid' : 'list';
 let hideSeen = !!getPref('hideSeen', false);
-const newFilters = () => ({ q4k: false, hdr: false, ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all', sizeMin: null, sizeMax: null, genre: 'all' });
+const newFilters = () => ({ res: 'all', ita: false, complete: false, type: 'all', fmt: 'all', minVote: 0, yFrom: null, yTo: null, releaser: '', codec: 'all', sizeMin: null, sizeMax: null, genre: 'all' });
 const filters = newFilters();
 
 let seenSet = new Set((() => { const a = getPref('seen', []); return Array.isArray(a) ? a : []; })().map(String));
@@ -1576,7 +1569,6 @@ function persistSeen() {
     setPref('seen', arr);
 }
 
-// ---- Toast ----
 function toast(msg, type = '', ms = 2600) {
     const box = $('seer-toasts');
     if (!box) return;
@@ -1592,17 +1584,15 @@ function toast(msg, type = '', ms = 2600) {
     }, ms);
 }
 
-// Svuota i metadati in cache (non FREQ_KEY) cosi' i titoli gia' visti vengono riletti con/senza TMDb
 function resetMetadataCache() {
     [...cacheMem.keys()].forEach(k => { if (k.startsWith(CACHE_PREFIX) && k !== FREQ_KEY) cacheDel(k); });
     savePending.clear();
     resolvedMem.clear();
-    registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; });
+    registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; it._projTries = 0; it._imgRetry = 0; });
     ratingTried.clear();
     heroNext = null;
 }
 
-// Svuota TUTTA la cache locale (metadati, risposte TMDb, frequenza immagini). Preferenze, preferiti e "scaricati" non vengono toccati.
 function clearAllCache() {
     clearTimeout(saveTimer); saveTimer = null;
     clearTimeout(freqTimer); freqTimer = null; freqDirty = false;
@@ -1612,7 +1602,7 @@ function clearAllCache() {
     resolvedMem.clear();
     warmed.clear();
     ratingTried.clear();
-    registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; });
+    registry.forEach(it => { it.posterTried = false; it.tmdbTried = false; it._projTries = 0; it._imgRetry = 0; });
     heroNext = null;
 }
 
@@ -1662,7 +1652,6 @@ function applyTmdbKey(key) {
     return true;
 }
 
-// true = valida, false = rifiutata da TMDb, null = impossibile verificare
 async function checkTmdbKey(key) {
     try {
         const j = await httpGetJson(`https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(key)}`);
@@ -1672,7 +1661,6 @@ async function checkTmdbKey(key) {
     } catch (e) { return null; }
 }
 
-// Pulizia residui di versioni precedenti (localStorage e voci IDB con prefisso vecchio)
 cacheReady.then(() => {
     setTimeout(() => {
         try {
@@ -1721,6 +1709,10 @@ function noteImages(srcs, titleK) {
 }
 const isRepeatedImage = src => (imgFreq[src] || []).length >= REPEAT_THRESHOLD;
 
+const PROJ_DEBUG = false;
+const pjLog = (...a) => { if (PROJ_DEBUG) console.log('[mirseer-proj]', ...a); };
+const isProjLike = it => !!it && (it.type === PROJECT_SECTION || it.forumName === PROJECT_SECTION);
+
 const resolvedMem = new Map();
 const savePending = new Map();
 const ratingTried = new Set();
@@ -1733,6 +1725,7 @@ const snapshot = it => ({
     magnets: (it.magnets || []).map(m => ({ uri: m.uri, dn: m.dn || '', label: m.label, season: m.season == null ? null : m.season, ep: m.ep == null ? null : m.ep })),
     thanksUrl: it.thanksUrl || null, extId: it.extId || null, kind: it.kind || 'video',
     origTitle: it.origTitle || null, fieldYear: it.fieldYear || null, genre: it.genre || null, country: it.country || null,
+    tmdbTitle: it.tmdbTitle || null, tmdbYear: it.tmdbYear || null,
     tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null,
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
@@ -1762,13 +1755,26 @@ window.addEventListener('pagehide', () => {
     try { if (worker) worker.terminate(); } catch (e) {}
 });
 
-function readCache(id) {
+function readCache(id, item = null) {
     const hit = resolvedMem.get(String(id));
-    if (hit) return hit;
+    if (hit) {
+        if (item && isProjLike(item) && !hit.poster) {
+            resolvedMem.delete(String(id));
+            cacheDel(CACHE_PREFIX + id);
+            pjLog(id, 'cache senza banner scartata (memoria)');
+            return null;
+        }
+        return hit;
+    }
     const raw = cacheGet(CACHE_PREFIX + id);
     if (!raw) return null;
     let p;
     try { p = JSON.parse(raw); } catch (e) { return null; }
+    if (item && isProjLike(item) && !p.poster) {
+        cacheDel(CACHE_PREFIX + id);
+        pjLog(id, 'cache senza banner scartata (disco)');
+        return null;
+    }
     if (!p.magnets) p.magnets = p.magnet ? [{ uri: p.magnet, dn: '', label: 'Magnet 1', season: null, ep: null }] : [];
     if (p.poster && p.posterSrc === 'forum' && isRepeatedImage(p.poster)) {
         const alt = (p.posterAlts || []).find(u => !isRepeatedImage(u));
@@ -1790,11 +1796,10 @@ function warmImage(url) {
     i.src = url;
 }
 
-// Cache-first paint: cached rows are complete on the very first frame
 function hydrateSync(item) {
     if (item.posterTried) return;
-    const c = readCache(item.id);
-    if (c) { applyParsed(item, c); warmImage(item.poster); }
+    const c = readCache(item.id, item);
+    if (c) { applyParsed(item, c); upgradeTmdbTitle(item, c); }
 }
 
 function parseEpisodeRef(text) {
@@ -1855,7 +1860,6 @@ function extractText(root) {
     return c.textContent.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// ---- Estrazione del blocco MediaInfo ([spoiler] / [code]) dal DOM del post (la parte testuale vive nel nucleo/worker) ----
 function extractMediaInfoDom(root) {
     if (!root) return null;
     const cands = [...root.querySelectorAll('dl.codebox code, dl.codebox, pre, code, .codebox, .spoiler, .spoilertext, .spoiler-content, .spoiler_content, [class*="spoiler"], [class*="codecontent"]')];
@@ -1928,11 +1932,6 @@ function isAnnouncementRow(link, row) {
     return !!row.querySelector('dl[class*="announce"], dl[class*="global_"], dl[class*="sticky"]');
 }
 
-// =====================================================================
-//  DATE: data di CREAZIONE del topic vs data dell'ultima risposta
-//  phpBB ordina viewforum per topic_last_post_time (bump): la data del
-//  primo messaggio e' SOLO dentro <dt> (topic-poster), mai in dd.lastpost.
-// =====================================================================
 const IT_MONTHS = { gen: 0, feb: 1, mar: 2, apr: 3, mag: 4, giu: 5, lug: 6, ago: 7, set: 8, ott: 9, nov: 10, dic: 11, jan: 0, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, dec: 11 };
 
 function parseLooseDate(str) {
@@ -1958,7 +1957,6 @@ function timeValue(t) {
     return Date.parse(t.getAttribute('datetime') || '') || parseLooseDate(t.textContent) || 0;
 }
 
-// Data di creazione: SOLO da <dt>, escludendo il blocco mobile ".responsive-show" (che contiene l'ultimo messaggio)
 function creationTime(row) {
     const dt = row && row.querySelector('dt');
     if (!dt) return 0;
@@ -1967,7 +1965,6 @@ function creationTime(row) {
     const any = [...dt.querySelectorAll('time')].filter(ok);
     const v = timeValue(prefer[0] || any[0]);
     if (v) return v;
-    // Nessun <time> in <dt>: testo dopo il nome utente ("di utente » 12 ott 2021")
     const clone = dt.cloneNode(true);
     clone.querySelectorAll('.responsive-show, .lastpost, .lastsubject, a.topictitle').forEach(e => e.remove());
     const txt = (clone.textContent || '').replace(/\s+/g, ' ');
@@ -1975,12 +1972,10 @@ function creationTime(row) {
     return parseLooseDate(i >= 0 ? txt.slice(i + 1) : txt);
 }
 
-// Data dell'ultima risposta: SOLO da dd.lastpost
 function lastReplyTime(row) {
     return row ? timeValue(row.querySelector('dd.lastpost time')) : 0;
 }
 
-// Autore del topic: dentro <dt>, fuori dal blocco "ultimo messaggio" mobile
 function topicAuthorEl(row) {
     if (!row) return null;
     const pool = [...row.querySelectorAll('dt .username, dt .username-coloured')].filter(e => !e.closest('.responsive-show, .lastpost'));
@@ -1992,7 +1987,6 @@ const userIdOf = el => {
     return m ? m[1] : null;
 };
 
-// Costruisce un item "vuoto" a partire dai dati base del topic (usato da forum, ricerca e preferiti)
 function buildItem({ topicId, href, raw, type, views, replies, ts, lastReplyTs, author, authorId, meta }) {
     meta = meta || pure.parseReleaseInfo(raw);
     const n = parseInt(topicId, 10);
@@ -2014,7 +2008,6 @@ function buildItem({ topicId, href, raw, type, views, replies, ts, lastReplyTs, 
     };
 }
 
-// Asincrona: il parsing dei titoli nuovi viene fatto in batch nel Web Worker (un solo messaggio per pagina)
 async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackType = null) {
     let links = doc.querySelectorAll('a.topictitle');
     if (!links.length) links = [...doc.querySelectorAll('a[href*="viewtopic.php"]')].filter(a => /[?&]t=\d+/.test(a.getAttribute('href') || ''));
@@ -2106,7 +2099,6 @@ async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackTyp
     return items;
 }
 
-// ---- Preferiti ("I miei Preferiti") ----
 function favSnapshot(item) {
     return {
         id: String(item.id), url: item.url, rawTitle: item.rawTitle, type: item.type,
@@ -2144,18 +2136,13 @@ function toggleFav(item) {
     else refreshItem(item);
 }
 
-// ---- Stato "Scaricato" ----
 function markSeen(item, on = true) {
     const id = String(item.id);
     if (on) seenSet.add(id); else seenSet.delete(id);
     persistSeen();
     refreshItem(item);
 }
-// =====================================================================
-//  v1.4: Watchlist, utente, selezione multipla, navigazione, hash, aspetto
-// =====================================================================
 
-// ---- Watchlist: segui releaser / titolo ----
 const relKey = n => String(n || '').trim().toLowerCase();
 const titleFollowKey = it => normT(it.cleanTitle) + '|' + it.type;
 const isFollowingRel = n => !!n && !!follows.rel[relKey(n)];
@@ -2244,7 +2231,6 @@ function renderWlPanel() {
         (wlNew.size ? `<button class="seer-facet active" data-wl="seen">✓ Segna tutto come visto (${wlNew.size})</button>` : '');
 }
 
-// ---- Utente loggato (avatar in alto a destra) ----
 function detectUser(doc) {
     const out = doc.querySelector('a[href*="mode=logout"]');
     if (!out) return null;
@@ -2272,12 +2258,12 @@ function paintUser() {
     btn.title = u ? u.name : 'Accedi al forum';
     menu.innerHTML = u
         ? `<div class="seer-user-head">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">` : '<span style="font-size:30px">🙂</span>'}<div><div class="seer-user-name">${esc(u.name)}</div><div class="seer-user-sub">MirCrew</div></div></div>` +
-          `<a href="/ucp.php" target="_blank" rel="noopener">⚙️ Impostazioni utente</a>` +
-          (u.uid ? `<a href="/memberlist.php?mode=viewprofile&amp;u=${esc(u.uid)}" target="_blank" rel="noopener">👤 Il mio profilo</a>` : '')
+          `<a href="#" data-acc="profile">👤 Il mio profilo</a>` +
+          `<a href="#" data-acc="settings">⚙️ Impostazioni utente</a>` +
+          `<a href="#" data-acc="stats">📊 La mia attività</a>`
         : `<a href="/ucp.php?mode=login" target="_blank" rel="noopener">🔑 Accedi al forum</a>`;
 }
 
-// ---- Invio multiplo ----
 async function sendRaw(item, uris) {
     const client = tcClient(), base = tcBase(), dir = tcPathFor(item);
     if (client === 'qbittorrent') await qbAdd(base, tcUser(), tcPass(), uris, dir);
@@ -2356,7 +2342,7 @@ async function batchRun(mode) {
             if (!mags.length) { empty++; continue; }
             const uris = mags.map(m => m.uri);
             if (mode === 'send') await sendRaw(it, uris); else all.push(...uris);
-            seenSet.add(String(it.id)); ok++;
+            seenSet.add(String(it.id)); ok++; trackDl(it, uris, mode);
         } catch (e) {
             fail++; lastErr = (e && e.message) || String(e);
             if (mode === 'send' && fail >= 3) break;
@@ -2372,7 +2358,6 @@ async function batchRun(mode) {
     if (ok) setSelMode(false); else updateBatchBar();
 }
 
-// ---- Modale: precedente / successivo ----
 function modalIndex() {
     if (!currentModalItem) return -1;
     let i = lastDisplayed.indexOf(currentModalItem);
@@ -2381,22 +2366,21 @@ function modalIndex() {
 }
 function updateModalNav() {
     const i = modalIndex(), more = $('seer-load-more-btn').style.display !== 'none';
-    $('seer-modal-prev').disabled = i <= 0;
-    $('seer-modal-next').disabled = i < 0 || (i >= lastDisplayed.length - 1 && !more);
+    $('seer-modal-prev').disabled = i < 0 || (i === 0 && !(isPagedView() && PG.page > 1));
+    $('seer-modal-next').disabled = i < 0 || (i >= lastDisplayed.length - 1 && !more && !(isPagedView() && PG.page < PG.total));
 }
 function navModal(dir) {
     const i = modalIndex();
     if (i < 0) return;
     const next = lastDisplayed[i + dir];
     if (!next) {
-        if (dir > 0 && $('seer-load-more-btn').style.display !== 'none') { toast('Carico altri risultati…'); $('seer-load-more-btn').click(); }
+        if (isPagedView()) { const np = PG.page + dir; if (np >= 1 && np <= PG.total) { pgOpenAfterLoad = dir > 0 ? 'first' : 'last'; goPage(np); } }
         return;
     }
     kbId = String(next.id); kbApply(true);
     openDetailModal(next);
 }
 
-// ---- Navigazione da tastiera nella lista ----
 const kbRows = () => [...$('seer-main-list').querySelectorAll('.seer-row')];
 const gridCols = rows => {
     if (viewMode !== 'grid' || !rows.length) return 1;
@@ -2420,7 +2404,6 @@ function kbMove(step) {
 }
 const kbItem = () => (kbId ? registry.get(kbId) : null);
 
-// ---- Skeleton ----
 function showSkeleton(n = 8) {
     const grid = viewMode === 'grid';
     const list = $('seer-main-list');
@@ -2431,7 +2414,6 @@ function showSkeleton(n = 8) {
     list.innerHTML = one.repeat(grid ? n * 2 : n);
 }
 
-// ---- Deep link: #seer?v=section&id=26&q=matrix ----
 const HASH_PREFIX = '#seer?';
 let lastHash = '';
 const viewKeyOf = (key, section) => key + ':' + (section ? section.id : '');
@@ -2448,7 +2430,9 @@ function syncHashNow() {
     if (search.active) { p.set('q', search.query); p.set('scope', $('seer-search-section-filter').value); }
     if (sortMode !== 'recent') p.set('sort', sortMode);
     if (viewMode === 'grid') p.set('mode', 'grid');
-    const fl = ['q4k', 'hdr', 'ita', 'complete'].filter(k => filters[k]);
+    if (isPagedView() && PG.page > 1) p.set('p', PG.page);
+    const fl = ['ita', 'complete'].filter(k => filters[k]);
+    if (filters.res !== 'all') p.set('res', filters.res);
     if (fl.length) p.set('f', fl.join(','));
     if (filters.genre !== 'all') p.set('g', filters.genre);
     if (filters.releaser) p.set('rl', filters.releaser);
@@ -2466,14 +2450,18 @@ async function restoreFromHash() {
     const sm = p.get('sort'); if (SORT_MODES.includes(sm)) { sortMode = sm; $('seer-sort-select').value = sm; }
     if (p.get('mode') === 'grid' || p.get('mode') === 'list') viewMode = p.get('mode');
     const fl = (p.get('f') || '').split(',');
-    ['q4k', 'hdr', 'ita', 'complete'].forEach(k => { if (fl.includes(k)) filters[k] = true; });
+    ['ita', 'complete'].forEach(k => { if (fl.includes(k)) filters[k] = true; });
+    if (['4k', '1080', '720', 'sd'].includes(p.get('res'))) filters.res = p.get('res');
+    else if (fl.includes('q4k')) filters.res = '4k';
     if (p.get('g')) filters.genre = p.get('g');
     if (p.get('rl')) filters.releaser = p.get('rl');
     filters.yFrom = parseInt(p.get('yf'), 10) || null;
     filters.yTo = parseInt(p.get('yt'), 10) || null;
     filters.minVote = parseFloat(p.get('mv')) || 0;
-    advOpen = !!(filters.yFrom || filters.yTo || filters.releaser || filters.minVote);
+    advOpen = !!(filters.yFrom || filters.yTo || filters.releaser || filters.minVote || filters.genre !== 'all');
 
+    { const q0 = p.get('q'), pn = parseInt(p.get('p'), 10) || 0, isS = !!(q0 && q0.length >= 3);
+      PG.want = isS ? 0 : pn; PG.wantSearch = isS ? pn : 0; }
     const v = p.get('v') || 'home';
     if (v === 'releaser' && p.get('rel')) await openReleaser(p.get('rel'), p.get('rid'));
     else if (v === 'section' && p.get('id')) await setView('section', { id: p.get('id'), name: p.get('name') || (sectionList.find(s => String(s.fid) === p.get('id')) || {}).name || 'Sezione' });
@@ -2489,7 +2477,6 @@ async function restoreFromHash() {
     return true;
 }
 
-// ---- Aspetto + generi ----
 const hexRgb = h => { const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); if (!m) return '99,102,241'; const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].join(','); };
 const ACCENTS = [['#6366f1', '#a855f7'], ['#10b981', '#06b6d4'], ['#f43f5e', '#f97316'], ['#f59e0b', '#ef4444'], ['#0ea5e9', '#6366f1'], ['#ec4899', '#8b5cf6']];
 function applyAppearance() {
@@ -2506,7 +2493,7 @@ const itemGenres = it => (it.genres && it.genres.length) ? it.genres
 function renderGenres() {
     const box = $('seer-genres');
     if (!box) return;
-    if (!facetsFor().vid) { box.innerHTML = ''; return; }
+    if (!facetsFor().rated) { box.innerHTML = ''; return; }
     const cnt = new Map();
     lastBase.forEach(it => itemGenres(it).forEach(g => {
         const k = normT(g);
@@ -2522,7 +2509,6 @@ function renderGenres() {
 }
 let genreTimer = null;
 const genresSoon = () => { clearTimeout(genreTimer); genreTimer = setTimeout(renderGenres, 400); };
-// ---- Pagina Releasers ----
 const REL_TIERS = [[1500, 'Legend', '👑'], [500, 'Senior', '🥇'], [200, 'Lv. 3', '🥈'], [100, 'Lv. 2', '🥉'], [50, 'Lv. 1', '⭐'], [10, 'Junior', '🔹'], [1, 'New', '🌱']];
 const relTier = n => REL_TIERS.find(t => n >= t[0]) || REL_TIERS[REL_TIERS.length - 1];
 const relPage = { list: [], t: 0, loading: false, err: '', q: '', tier: 'all', timer: null, obs: null };
@@ -2723,14 +2709,15 @@ const inflight = new Map();
 const jobQueue = [];
 let activeJobs = 0;
 
-function enqueue(key, task, el = null) {
+function enqueue(key, task, el = null, low = false) {
     return new Promise((resolve, reject) => {
-        jobQueue.push({ key, task, el, resolve, reject });
+        jobQueue.push({ key, task, el, low, resolve, reject });
         pump();
     });
 }
 
 function jobScore(job) {
+    if (job.low) return 1e9;
     if (!job.el) return -1;
     const r = job.el.getBoundingClientRect();
     const vh = window.innerHeight;
@@ -2804,6 +2791,15 @@ async function fetchTopicPage(url, fresh = false) {
     }
     const doc = new DOMParser().parseFromString(html, 'text/html');
     return { doc, html };
+}
+
+async function fetchTopicPageRetry(url) {
+    try { return await fetchTopicPage(url); }
+    catch (e) {
+        if (/HTTP 4(?!29)\d\d/.test(String((e && e.message) || ''))) throw e;
+        await sleep(900);
+        return fetchTopicPage(url);
+    }
 }
 
 const SHOT_MARKER_RE = /screenshots?|\bscreens?\b|anteprim[ae]|immagini\s+del\s+file|media\s*info/i;
@@ -2963,6 +2959,19 @@ function onImageProblem(img) {
     const item = registry.get(String(img.dataset.seerId));
     if (!item) return;
     const src = img.getAttribute('src');
+    if (isProjLike(item) && img.dataset.seerRole !== 'bg' && item.poster === src) {
+        const n = item._imgRetry = (item._imgRetry || 0) + 1;
+        pjLog(item.id, 'errore caricamento banner, giro', n, src);
+        if (n <= 3) {
+            setTimeout(() => { if (img.isConnected && img.getAttribute('src') === src) { img.removeAttribute('src'); img.src = src; } }, 1500 * n);
+        } else {
+            const f = document.createElement('div');
+            f.className = 'seer-poster-fallback';
+            f.innerHTML = item.kind ? kindIcon(item) : typeIcon(item);
+            img.replaceWith(f);
+        }
+        return;
+    }
     if (img.dataset.seerRole === 'bg') {
         if (item.backdrop && item.backdrop === src) { item.backdrop = null; saveCache(item); refreshItem(item); }
         else if (item.poster === src) advancePoster(item);
@@ -2984,8 +2993,6 @@ function httpGetJson(url) {
         }
     });
 }
-// Cerca nel post un identificativo esterno affidabile: IMDb (tt1234567) oppure link TMDb diretto.
-// Ritorna 'tt1234567' | 'tmdb:movie:123' | 'tmdb:tv:456' | null
 const IMDB_URL_RE = /imdb\.com\/(?:[a-z]{2}\/)?title\/(tt\d{6,10})/i;
 const TMDB_URL_RE = /themoviedb\.org\/(movie|tv)\/(\d+)/i;
 function findExtId(root, text) {
@@ -3002,6 +3009,10 @@ function findExtId(root, text) {
 const tmdbOut = (r, kind) => ({
     id: r.id || null,
     kind: kind || null,
+    title: (kind === 'tv' ? r.name : r.title) || null,
+    origName: (kind === 'tv' ? r.original_name : r.original_title) || null,
+    year: (((kind === 'tv' ? r.first_air_date : r.release_date) || '').slice(0, 4)) || null,
+    byId: false,
     poster: r.poster_path ? 'https://image.tmdb.org/t/p/w500' + r.poster_path : null,
     backdrop: r.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + r.backdrop_path : null,
     overview: r.overview || '',
@@ -3010,7 +3021,6 @@ const tmdbOut = (r, kind) => ({
     trailer: null, imdbId: r.imdb_id || null
 });
 
-// Dettagli aggiuntivi: voto, generi, trailer YouTube (it, con fallback en), IMDb ID. Ritorna null in caso di errore.
 async function tmdbEnrich(out, apiKey) {
     if (!out || !out.id || !out.kind) return null;
     try {
@@ -3046,14 +3056,13 @@ const normT = s => {
 };
 
 const COUNTRY_MAP = [
-    [/\b(usa|stati\s*uniti|america)/i, 'US'], [/\b(italia|italy)/i, 'IT'],
-    [/\b(regno\s*unito|uk|inghilterra|gran\s*bretagna)/i, 'GB'], [/\b(francia|france)/i, 'FR'],
+    [/\b(usa\b|stati\s*uniti|america)/i, 'US'], [/\b(italia|italy)/i, 'IT'],
+    [/\b(regno\s*unito|uk\b|inghilterra|gran\s*bretagna)/i, 'GB'], [/\b(francia|france)/i, 'FR'],
     [/\b(giappone|japan)/i, 'JP'], [/\b(corea|korea)/i, 'KR'], [/\b(spagna|spain)/i, 'ES'],
     [/\b(germania|germany)/i, 'DE'], [/\b(canada)/i, 'CA'], [/\b(australia)/i, 'AU']
 ];
 const countryCode = s => { if (!s) return null; const m = COUNTRY_MAP.find(([re]) => re.test(s)); return m ? m[1] : null; };
 
-// Sceglie il risultato TMDb più coerente con i dati del post; null se nessuno è affidabile
 function pickTmdbResult(results, kind, item) {
     const wanted = [item.origTitle, item.cleanTitle].filter(Boolean).map(normT);
     const y = parseInt(item.fieldYear || item.year, 10) || null;
@@ -3076,7 +3085,7 @@ function pickTmdbResult(results, kind, item) {
             const d = Math.abs(ry - y);
             if (d === 0) s += 40;
             else if (d === 1) s += 25;
-            else if (kind === 'movie' || firstSeason) continue;   // anno incompatibile: scarta
+            else if (kind === 'movie' || firstSeason) continue;
         }
         if (cc && Array.isArray(r.origin_country) && r.origin_country.includes(cc)) s += 15;
         s += Math.min(r.popularity || 0, 50) / 10;
@@ -3086,7 +3095,6 @@ function pickTmdbResult(results, kind, item) {
     return bestScore >= 40 ? best : null;
 }
 
-// undefined = errore API (non cacheare), null = nessun risultato affidabile
 async function tmdbSearchSmart(item, apiKey, kind) {
     const y = item.fieldYear || item.year || '';
     const queries = [item.origTitle || item.cleanTitle];
@@ -3105,23 +3113,31 @@ async function tmdbSearchSmart(item, apiKey, kind) {
     return null;
 }
 
-// 1) se il post contiene un ID IMDb/TMDb lo usa (preciso); 2) altrimenti cerca per titolo originale + anno + paese
-async function tmdbLookup(item) {
+const tmdbPending = new Map();
+function tmdbLookup(item) {
+    const k = [item.type, item.extId || '', normT(item.origTitle || item.cleanTitle), item.fieldYear || item.year || '', (item.meta && item.meta.isTvSeries) ? 1 : 0].join('|');
+    let p = tmdbPending.get(k);
+    if (!p) {
+        p = tmdbLookupRaw(item).finally(() => { if (tmdbPending.get(k) === p) tmdbPending.delete(k); });
+        tmdbPending.set(k, p);
+    }
+    return p;
+}
+async function tmdbLookupRaw(item) {
     const apiKey = getTmdbKey();
     if (!apiKey) return null;
     const ext = item.extId || '';
     const isVideoSection = sectionKindOf(item.type) === 'video';
     if (item.type !== 'Film' && item.type !== 'Serie TV' && !(ext && isVideoSection)) return null;
 
-    // --- ricerca tramite ID ---
     if (ext) {
         const idKey = `${CACHE_PREFIX}tmdb_id_${ext.replace(/[^a-z0-9]/gi, '_')}`;
-        try { const c = cacheGet(idKey); if (c) return JSON.parse(c); } catch (e) {}
+        try { const c = cacheGet(idKey); if (c) { const hit = JSON.parse(c); if (hit && (hit.title !== undefined || !hit.id)) return hit; } } catch (e) {}
         try {
             let r = null, rk = null;
             if (/^tt\d+$/.test(ext)) {
                 const j = await httpGetJson(`https://api.themoviedb.org/3/find/${ext}?api_key=${encodeURIComponent(apiKey)}&language=it-IT&external_source=imdb_id`);
-                if (!j || !Array.isArray(j.movie_results) || !Array.isArray(j.tv_results)) return null;   // errore (chiave, rate limit): non cacheare
+                if (!j || !Array.isArray(j.movie_results) || !Array.isArray(j.tv_results)) return null;
                 const preferTv = item.type === 'Serie TV' || !!(item.meta && item.meta.isTvSeries);
                 const tvR = j.tv_results[0], mvR = j.movie_results[0];
                 if (preferTv) { r = tvR || mvR; rk = tvR ? 'tv' : 'movie'; }
@@ -3133,6 +3149,7 @@ async function tmdbLookup(item) {
             }
             if (r) {
                 const out = tmdbOut(r, rk);
+                out.byId = true;
                 const en = await tmdbEnrich(out, apiKey);
                 if (en) {
                     Object.assign(out, en);
@@ -3141,18 +3158,22 @@ async function tmdbLookup(item) {
                 return out;
             }
         } catch (e) { console.warn('TMDB id lookup failed, uso la ricerca per titolo', e); }
-        // ID non trovato su TMDb: ripiega sul titolo (solo Film / Serie TV)
         if (item.type !== 'Film' && item.type !== 'Serie TV') return null;
     }
 
-    // --- ricerca per titolo + anno + paese (con punteggio) ---
     const kind = item.type === 'Serie TV' ? 'tv' : 'movie';
     const yKey = item.fieldYear || item.year || '';
     const ck = `${CACHE_PREFIX}tmdb_${kind}_${normT(item.origTitle || item.cleanTitle).replace(/ /g, '_')}_${yKey}`;
-    try { const c = cacheGet(ck); if (c) return JSON.parse(c); } catch (e) {}
+    try {
+        const c = cacheGet(ck);
+        if (c) {
+            const hit = JSON.parse(c);
+            if (hit && (hit.id ? hit.title !== undefined : Date.now() - (hit.t || 0) < 3 * 864e5)) return hit;
+        }
+    } catch (e) {}
 
     const r = await tmdbSearchSmart(item, apiKey, kind);
-    if (r === undefined) return null;          // errore API: non cacheare
+    if (r === undefined) throw new Error('TMDb: risposta non valida');
     if (!r) {
         cacheSet(ck, JSON.stringify({ t: Date.now() }));
         return {};
@@ -3253,14 +3274,76 @@ function applyParsed(item, p) {
     item.kind = p.kind || 'video';
     if (sectionKindOf(item.type) === 'video' && item.kind === 'audio') item.kind = 'video';
     item.body = p.body || null;
+    item.tmdbTitle = p.tmdbTitle || null;
+    item.tmdbYear = p.tmdbYear || null;
+    item.displayTitle = composeDisplayTitle(item);
+    if (isProjLike(item) && !item.poster) return;
     item.posterTried = true;
     resolvedMem.set(String(item.id), snapshot(item));
 }
 
-function scrapeTopicData(item, el = null) {
-    if (item.posterTried) return Promise.resolve(snapshot(item));
+function composeDisplayTitle(item) {
+    const m = item.meta || {};
+    const base = item.tmdbTitle || item.cleanTitle || item.rawTitle || '';
+    const y = String(item.year || item.tmdbYear || '');
+    const has = y && new RegExp('(?:^|\\D)' + y + '(?!\\d)').test(base);
+    const tag = (y && !has) ? ' (' + y + ')' : '';
+    return (m.isTvSeries && m.season) ? `${base}${tag} \u2013 ${m.season.label}` : base + tag;
+}
 
-    const cached = readCache(item.id);
+function tmdbTitleReliable(item, tm) {
+    if (!tm || !tm.title) return false;
+    if (tm.byId) return true;
+    const wanted = [item.origTitle, item.cleanTitle].filter(Boolean).map(normT).filter(Boolean);
+    const names = [tm.title, tm.origName].filter(Boolean).map(normT).filter(Boolean);
+    return wanted.some(w => names.includes(w));
+}
+
+let tmdbTitleChain = Promise.resolve();
+function upgradeTmdbTitle(item, cached) {
+    if (!cached || cached.tmdbTitle !== undefined || !item.tmdbId || !item.tmdbKind || item._ttTried) return;
+    const key = getTmdbKey();
+    if (!key) return;
+    item._ttTried = true;
+    tmdbTitleChain = tmdbTitleChain.then(async () => {
+        try {
+            const j = await httpGetJson(`https://api.themoviedb.org/3/${item.tmdbKind}/${item.tmdbId}?api_key=${encodeURIComponent(key)}&language=it-IT`);
+            if (!j || !j.id) return;
+            const tm = tmdbOut(j, item.tmdbKind);
+            tm.byId = !!item.extId;
+            item.tmdbTitle = tmdbTitleReliable(item, tm) ? tm.title : null;
+            item.tmdbYear = tm.year || null;
+            item.displayTitle = composeDisplayTitle(item);
+            saveCache(item);
+            refreshItem(item);
+        } catch (e) {  }
+    });
+}
+
+const PROJ_TRIES_MAX = 3;
+const PROJ_TRIES_LIFE = 6;
+const PROJ_BACKOFF = [0, 1200, 3500];
+
+function projFirstImgUrl(root, why = null) {
+    if (!root) return null;
+    for (const im of root.querySelectorAll('img')) {
+        const src = im.getAttribute('data-src') || im.getAttribute('data-lazy-src') || im.getAttribute('data-original') || im.getAttribute('src') || '';
+        let skip = '';
+        if (im.closest('.signature, .sig')) skip = 'firma';
+        else if (!src) skip = 'src vuoto';
+        else if (/^data:/i.test(src)) skip = 'data-uri';
+        else if (/(?:^|\s)smilies?(?:\s|$)|emoji/i.test(im.getAttribute('class') || '')
+            || /\/smilies\/|smiley|emoji|\/ranks?\/|rank_|\/avatars?\/|\bicon_\w+\.(?:gif|png)/i.test(src)) skip = 'smilies/rank/avatar/icona';
+        if (skip) { if (why) why.push(skip + ': ' + src.slice(0, 90)); continue; }
+        const a = im.closest('a[href]'), ah = a ? (a.getAttribute('href') || '') : '';
+        return absUrl(/\.(?:jpe?g|png|webp|gif)(?:\?|$)/i.test(ah) ? ah : src);
+    }
+    return null;
+}
+
+
+function scrapeProjectBanner(item, el = null) {
+    const cached = readCache(item.id, item);
     if (cached) {
         applyParsed(item, cached);
         warmImage(item.poster);
@@ -3268,19 +3351,91 @@ function scrapeTopicData(item, el = null) {
     }
 
     if (inflight.has(item.id)) {
-        if (!el) {
+        const queued = jobQueue.find(j => j.key === item.id);
+        if (queued && (!el || !queued.el || !queued.el.isConnected)) queued.el = el;
+        return inflight.get(item.id);
+    }
+    if ((item._projTries || 0) >= PROJ_TRIES_LIFE) {
+        pjLog(item.id, 'budget tentativi esaurito: non riprovo fino al reload');
+        return Promise.resolve(snapshot(item));
+    }
+
+    const p = (async () => {
+        let lastErr = '';
+        for (let k = 0; k < PROJ_TRIES_MAX && (item._projTries || 0) < PROJ_TRIES_LIFE; k++) {
+            if (k) {
+                await sleep(PROJ_BACKOFF[k] || 3500);
+                if (el && !el.isConnected) { pjLog(item.id, 'riga rimossa durante il backoff: stop'); return null; }
+                if (item.posterTried) return snapshot(item);
+            }
+            item._projTries = (item._projTries || 0) + 1;
+            try {
+                const page = await enqueue(item.id, () => projFetchDoc(item.url), el);
+                if (page === CANCELLED) {
+                    item._projTries--;
+                    pjLog(item.id, 'job CANCELLED (cancelQueued o riga staccata dal DOM)');
+                    return null;
+                }
+                const { doc } = page;
+                try { projTypeFromCrumbs(item, doc); } catch (e) {}
+                const posts = pjPostsOf(doc);
+                const root = posts.length ? posts[0].el : doc.querySelector('.post .content, .postbody .content, div.content');
+                if (!root) {
+                    const msg = ((doc.querySelector('#message') || {}).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+                    throw new Error('post principale non trovato' + (msg ? ' (' + msg + ')' : ''));
+                }
+                const why = [];
+                const url = projFirstImgUrl(root, why);
+                pjLog(item.id, 'tentativo', k + 1, '| img nel post:', root.querySelectorAll('img').length, '| scartate:', why, '| banner:', url);
+                if (!url) throw new Error('nessuna immagine utile nel primo post');
+                applyParsed(item, { poster: url, posterSrc: 'forum', posterAlts: [], kind: 'text', synopsis: '', author: posts.length ? posts[0].author : '' });
+                warmImage(item.poster);
+                saveCache(item);
+                refreshItem(item);
+                pjLog(item.id, 'OK', item.poster);
+                return snapshot(item);
+            } catch (e) {
+                lastErr = (e && e.message) || String(e);
+                pjLog(item.id, 'tentativo', k + 1, 'fallito:', lastErr);
+            }
+        }
+        pjLog(item.id, 'rinuncia: la riga resta senza banner, NON marcata ne\' salvata in cache, riprovabile. Ultimo errore:', lastErr);
+        return snapshot(item);
+    })().finally(() => {
+        if (inflight.get(item.id) === p) inflight.delete(item.id);
+    });
+
+    inflight.set(item.id, p);
+    return p;
+}
+
+function scrapeTopicData(item, el = null, low = false) {
+    if (item.posterTried) return Promise.resolve(snapshot(item));
+    if (isProjLike(item)) return scrapeProjectBanner(item, el);
+
+    const cached = readCache(item.id);
+    if (cached) {
+        applyParsed(item, cached);
+        if (!el) warmImage(item.poster);
+        upgradeTmdbTitle(item, cached);
+        return Promise.resolve(cached);
+    }
+
+    if (inflight.has(item.id)) {
+        if (!low) {
             const queued = jobQueue.find(j => j.key === item.id);
-            if (queued) queued.el = null;
+            if (queued) { queued.low = false; if (!el) queued.el = null; }
         }
         return inflight.get(item.id);
     }
 
     const p = (async () => {
         try {
-            const page = await enqueue(item.id, () => fetchTopicPage(item.url), el);
+            const page = await enqueue(item.id, () => fetchTopicPageRetry(item.url), el, low);
             if (page === CANCELLED) return null;
 
             const { doc, html } = page;
+            try { projTypeFromCrumbs(item, doc); } catch (e) {}
             const postContent = doc.querySelector('.post .content, .postbody .content, div.content');
             const fullText = postContent ? extractText(postContent) : '';
             const magnets = findMagnets(doc, html);
@@ -3296,14 +3451,13 @@ function scrapeTopicData(item, el = null) {
             const kind = detectKind(postContent, fullText, magnets, item, !!thanksUrl && !magnets.length);
             item.extId = findExtId(postContent, fullText);
 
-            // Parsing testuale pesante (scheda, sinossi, MediaInfo testuale, corpo) nel Web Worker
             const pp = await workerCall('post', fullText);
             const fields = pp.fields;
             Object.assign(item, fields);
 
             let posterUrl = null, posterAlts = [], posterSrc = null, backdrop = null;
             let synopsisText = null;
-            let tm = null;
+            let tm = null, tmdbFailed = false;
 
             if (postContent) {
                 const found = pickPosters(postContent, item, author);
@@ -3323,7 +3477,7 @@ function scrapeTopicData(item, el = null) {
                         backdrop = t.backdrop || null;
                     }
                     if (!synopsisText && t && isRealProse(t.overview)) synopsisText = t.overview;
-                } catch (e) { console.warn('TMDB error', e); }
+                } catch (e) { console.warn('TMDB error', e); tmdbFailed = true; }
             }
 
             const result = {
@@ -3332,6 +3486,7 @@ function scrapeTopicData(item, el = null) {
                 synopsis: synopsisText || (kind === 'text' ? '' : "Sinossi disponibile all'interno del post sul forum."),
                 magnets, magnet: magnets[0] ? magnets[0].uri : null, thanksUrl, extId: item.extId || null, kind,
                 tmdbId: tm ? tm.id || null : null, tmdbKind: tm ? tm.kind || null : null,
+                tmdbTitle: (tm && tmdbTitleReliable(item, tm)) ? tm.title : null, tmdbYear: tm ? tm.year || null : null,
                 vote: tm ? tm.vote || null : null, genres: tm ? tm.genres || [] : [],
                 trailer: tm ? tm.trailer || null : null, imdbId: tm ? tm.imdbId || null : null,
                 mediaInfo: extractMediaInfoDom(postContent) || pp.miText || null,
@@ -3343,8 +3498,8 @@ function scrapeTopicData(item, el = null) {
             };
 
             applyParsed(item, result);
-            warmImage(item.poster);
-            saveCache(item);
+            if (!el) warmImage(item.poster);
+            if (!tmdbFailed) saveCache(item);
             return result;
         } catch (e) {
             console.error('Topic scrape failed', e);
@@ -3370,16 +3525,20 @@ function onRowsVisible(entries, observer) {
         if (item.posterTried) { fillRow(row, item); return; }
 
         scrapeTopicData(item, row).then(data => {
-            if (!data || !row.isConnected) return;
+            if (!data) {
+                if (isProjLike(item) && !item.posterTried && row.isConnected && (row._pjReobs = (row._pjReobs || 0) + 1) <= 3) {
+                    pjLog(item.id, 'riosservo la riga dopo CANCELLED, giro', row._pjReobs);
+                    setTimeout(() => { if (row.isConnected && !item.posterTried) posterObserver.observe(row); }, 500 * row._pjReobs);
+                }
+                return;
+            }
+            if (!row.isConnected) return;
             genresSoon();
             fillRow(row, item);
         });
     });
 }
 
-// =====================================================================
-//  Client torrent locale (qBittorrent / Transmission WebUI)
-// =====================================================================
 const TC_NAMES = { qbittorrent: 'qBittorrent', transmission: 'Transmission' };
 const tcClient = () => { const c = getPref('tcClient', 'off'); return TC_NAMES[c] ? c : 'off'; };
 const tcName = () => TC_NAMES[tcClient()] || '';
@@ -3468,6 +3627,7 @@ async function sendToClient(item, uris) {
         else for (const u of uris) await trRpc(base, tcUser(), tcPass(), { method: 'torrent-add', arguments: dir ? { filename: u, 'download-dir': dir } : { filename: u } });
         toast(`⬇️ ${uris.length > 1 ? uris.length + ' magnet inviati' : 'Magnet inviato'} a ${tcName()}${dir ? ' → ' + dir : ''}`, 'ok', dir ? 3800 : 2600);
         if (item) markSeen(item, true);
+        trackDl(item, uris, 'send');
         return true;
     } catch (e) {
         toast('❌ Invio fallito: ' + ((e && e.message) || e), 'err', 4500);
@@ -3548,6 +3708,7 @@ function goHero(i) {
     const box = $('seer-hero');
     box.querySelectorAll('.seer-hero-slide').forEach((s, k) => s.classList.toggle('active', k === heroIdx));
     box.querySelectorAll('.seer-hero-dot').forEach((d, k) => d.classList.toggle('active', k === heroIdx));
+    hydrateHero();
 }
 
 function renderHero() {
@@ -3573,7 +3734,7 @@ function renderHero() {
 
         return `
         <div class="seer-hero-slide ${active ? 'active' : ''}">
-            ${bg ? `<img class="seer-hero-bg ${blur ? 'blur' : ''}" src="${esc(bg)}" alt="" decoding="async" ${active ? 'fetchpriority="high"' : ''} ${bgRole}>` : ''}
+            ${bg ? `<img class="seer-hero-bg ${blur ? 'blur' : ''}" ${active ? 'src' : 'data-hsrc'}="${esc(bg)}" alt="" decoding="async" ${active ? 'fetchpriority="high"' : ''} ${bgRole}>` : ''}
             <div class="seer-hero-shade"></div>
             <div class="seer-hero-body">
                 <div class="seer-hero-text">
@@ -3587,7 +3748,7 @@ function renderHero() {
                         <a class="seer-hero-btn" href="${esc(it.url)}" target="_blank" rel="noopener">🔗 Apri sul forum</a>
                     </div>
                 </div>
-                ${it.poster ? `<div class="seer-hero-poster"><img src="${esc(it.poster)}" alt="" decoding="async" ${active ? 'fetchpriority="high"' : ''} data-seer-id="${esc(it.id)}" data-seer-role="poster"></div>` : ''}
+                ${it.poster ? `<div class="seer-hero-poster"><img ${active ? 'src' : 'data-hsrc'}="${esc(it.poster)}" alt="" decoding="async" ${active ? 'fetchpriority="high"' : ''} data-seer-id="${esc(it.id)}" data-seer-role="poster"></div>` : ''}
             </div>
         </div>`;
     }).join('');
@@ -3596,6 +3757,31 @@ function renderHero() {
     box.innerHTML = slides +
         (heroSlides.length > 1 ? `<button class="seer-hero-arrow prev" data-hero="prev" aria-label="Precedente">‹</button><button class="seer-hero-arrow next" data-hero="next" aria-label="Successivo">›</button>` : '') +
         `<div class="seer-hero-dots">${dots}</div>`;
+    hydrateHero();
+}
+
+let heroHydTimer = null;
+function hydrateHero() {
+    const box = $('seer-hero');
+    const n = heroSlides.length;
+    if (!box || !n) return;
+    const load = (s, low) => {
+        if (!s) return;
+        s.querySelectorAll('img[data-hsrc]').forEach(im => {
+            if (low) { try { im.fetchPriority = 'low'; } catch (e) {} }
+            im.src = im.dataset.hsrc;
+            im.removeAttribute('data-hsrc');
+        });
+    };
+    const slides = box.querySelectorAll('.seer-hero-slide');
+    load(slides[heroIdx], false);
+    load(slides[(heroIdx + 1) % n], false);
+    clearTimeout(heroHydTimer);
+    heroHydTimer = setTimeout(() => {
+        const cur = $('seer-hero');
+        if (!cur || cur.style.display === 'none') return;
+        cur.querySelectorAll('.seer-hero-slide').forEach(s => load(s, true));
+    }, 4000);
 }
 
 let mainMorePromise = null;
@@ -3614,7 +3800,7 @@ function loadMoreMain() {
     return mainMorePromise;
 }
 
-async function collectHeroBatch(token, onEach) {
+async function collectHeroBatch(token, onEach, low = false) {
     const batch = [];
     let guard = 0;
     while (batch.length < HERO_COUNT && guard++ < 6) {
@@ -3627,7 +3813,7 @@ async function collectHeroBatch(token, onEach) {
             continue;
         }
 
-        const jobs = pool.map(it => scrapeTopicData(it).catch(() => null));
+        const jobs = pool.map(it => scrapeTopicData(it, null, low).catch(() => null));
         for (let i = 0; i < pool.length && batch.length < HERO_COUNT; i++) {
             const data = await jobs[i];
             if (token !== heroToken) return null;
@@ -3650,8 +3836,8 @@ async function prefetchHero() {
     heroPrefetching = true;
     const token = heroToken;
     try {
-        const b = await collectHeroBatch(token);
-        if (token === heroToken && b && b.length) { heroNext = b; b.forEach(it => warmImage(it.backdrop || it.poster)); }
+        const b = await collectHeroBatch(token, null, true);
+        if (token === heroToken && b && b.length) { heroNext = b; warmImage(b[0].backdrop || b[0].poster); }
     } catch (e) { console.warn('Hero prefetch error', e); }
     finally { heroPrefetching = false; }
 }
@@ -3682,9 +3868,6 @@ async function buildHero() {
     prefetchHero();
     }
 
-// =====================================================================
-//  MODALE DETTAGLIO
-// =====================================================================
 function setModalImage(item, modalWindow, modalLeft) {
     modalLeft.innerHTML = '';
     const img = document.createElement('img');
@@ -3718,7 +3901,6 @@ function paintModalArt(item) {
     }
 }
 
-// Link esterni rapidi (IMDb / TMDb / JustWatch)
 function externalLinks(item) {
     if (effKind(item) !== 'video' || item.type === 'Musica Video') return [];
     const title = item.origTitle || item.cleanTitle;
@@ -3738,14 +3920,12 @@ function externalLinks(item) {
     return links;
 }
 
-// Tag crew dal titolo della release (es. "...x265-NAHOM" -> NAHOM)
 function releaserCrew(item) {
     const m = (item.rawTitle || '').match(/-\s*([A-Za-z0-9_.]{3,20})\s*(?:[\])]|$)/);
     const c = m ? m[1] : '';
     return /^(?:\d{3,4}p|x26[45]|hevc|h26[45]|ita|eng|multi)$/i.test(c) ? '' : c;
 }
 
-// Riga azioni secondarie: pillole ⭐ / ✓ / ▶ + menu a tendina per i link esterni
 function paintModalTools(item) {
     const box = $('seer-modal-tools');
     if (!box) return;
@@ -3764,7 +3944,6 @@ function paintModalTools(item) {
     box.innerHTML = h;
 }
 
-// ---- Versioni (D1): raggruppa le release dello stesso titolo ----
 const verSeason = it => (it.meta && it.meta.season ? it.meta.season.short : '');
 const verTitleKey = it => {
     if (sectionKindOf(it.type) !== 'video') return 'id:' + it.id;
@@ -3835,7 +4014,6 @@ function paintModal(item) {
 
     $('seer-modal-title').innerText = item.displayTitle;
 
-    // Badge releaser + link al forum accanto al titolo
     let mr = '';
     if (item.author) {
         const crew = releaserCrew(item);
@@ -3846,7 +4024,6 @@ function paintModal(item) {
     mr += `<a class="seer-meta-pill" href="${esc(item.url)}" target="_blank" rel="noopener" title="Apri il post sul forum">🔗 Forum</a>`;
     $('seer-modal-metarow').innerHTML = mr;
 
-    // Chips informativi (nessuna duplicazione con il nastro specifiche)
     let chipsHtml = '';
     if (item.year) chipsHtml += `<span class="seer-chip">${esc(item.year)}</span>`;
     chipsHtml += `<span class="seer-chip">${esc(item.type)}</span>`;
@@ -3868,7 +4045,6 @@ function paintModal(item) {
     }
     $('seer-modal-chips').innerHTML = chipsHtml;
 
-    // Nastro specifiche unico (risoluzione, HDR, sorgente, codec, audio, sottotitoli)
     if (kind === 'video') {
         const m = item.meta;
         let rb = '';
@@ -3890,7 +4066,6 @@ function paintModal(item) {
 
     $('seer-modal-text').innerText = kind === 'text' ? (item.body || 'Caricamento del testo dal post...') : '';
 
-    // Sinossi con limite di altezza e "Mostra altro / Mostra meno"
     const ov = $('seer-modal-overview'), tg = $('seer-syn-toggle');
     if (ov.dataset.itemId !== idStr) { ov.dataset.itemId = idStr; ov.dataset.open = '0'; }
     const open = ov.dataset.open === '1';
@@ -3900,7 +4075,6 @@ function paintModal(item) {
     tg.style.display = open ? 'block' : 'none';
     if (!open) requestAnimationFrame(() => { if (ov.scrollHeight > ov.clientHeight + 2) tg.style.display = 'block'; });
 
-    // Cassetto: titolo originale della release + MediaInfo
     const mi = $('seer-mediainfo-wrap');
     if (mi.dataset.itemId !== idStr) { mi.open = false; mi.dataset.itemId = idStr; }
     $('seer-modal-raw').textContent = item.rawTitle;
@@ -3921,6 +4095,7 @@ function copyToClipboard(t) {
 function openMagnet(uri) {
     const a = document.createElement('a');
     a.href = uri;
+    a.dataset.seerTracked = '1';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -4028,6 +4203,7 @@ function hideModal() {
 }
 
 async function openDetailModal(item, keepVersions = false) {
+    if (isProjectItem(item) && !(view.key === 'project' && proj && proj.item === item)) { openProject(item); return; }
     const myToken = ++modalToken;
 
     const overlay = $('seer-modal-overlay');
@@ -4088,7 +4264,6 @@ async function openDetailModal(item, keepVersions = false) {
     }
 }
 
-// ---- Trailer (lightbox YouTube) ----
 function openTrailer(item) {
     if (!item || !item.trailer) return;
     const k = encodeURIComponent(item.trailer.key);
@@ -4106,14 +4281,11 @@ function closeTrailer() {
 
 const currentSectionStore = () => sections.get(String(view.section.id));
 
-// =====================================================================
-//  ORDINAMENTO: data di CREAZIONE del topic (tie-break: topic ID numerico)
-// =====================================================================
 const DAY_MS = 864e5;
 const byRelease = (x, y) => {
     const dx = x.ts || 0, dy = y.ts || 0;
-    if (dx && dy && Math.abs(dy - dx) >= DAY_MS) return dy - dx;      // differenza >= 24h: vale la data
-    return ((y.numericId || 0) - (x.numericId || 0)) || (dy - dx);     // < 24h o data mancante: ID piu' alto = piu' recente
+    if (dx && dy && Math.abs(dy - dx) >= DAY_MS) return dy - dx;
+    return ((y.numericId || 0) - (x.numericId || 0)) || (dy - dx);
 };
 
 function applySort(items) {
@@ -4129,9 +4301,6 @@ function applySort(items) {
     return a;
 }
 
-// =====================================================================
-//  RICERCA FUZZY lato client (Levenshtein con soglia)
-// =====================================================================
 function lev(a, b, max) {
     if (Math.abs(a.length - b.length) > max) return max + 1;
     let prev = new Array(b.length + 1);
@@ -4154,7 +4323,6 @@ function lev(a, b, max) {
 const fuzzyHay = it => it._hay || (it._hay = normT(it.cleanTitle + ' ' + (it.origTitle || '') + ' ' + it.rawTitle));
 const fuzzyWords = it => it._words || (it._words = [...new Set(fuzzyHay(it).split(' '))].filter(w => w.length > 2));
 
-// 0 = nessuna corrispondenza; piu' alto = migliore
 function fuzzyScore(it, q) {
     const tokens = normT(q).split(' ').filter(Boolean);
     if (!tokens.length) return 1;
@@ -4191,10 +4359,8 @@ function fuzzyPool(query, sc) {
         .map(x => x[0]);
 }
 
-// =====================================================================
-//  FILTRI rapidi + avanzati (E1)
-// =====================================================================
-const FACETS = [['q4k', '💎 Solo 4K / UHD'], ['hdr', '📺 Dolby Vision / HDR'], ['complete', '📦 Stagione Completa']];
+const FACETS = [['complete', '📦 Stagione Completa']];
+const RES_FACETS = [['4k', '💎 4K UHD'], ['1080', '1080p'], ['720', '720p'], ['sd', 'SD']];
 const FMT = {
     mp3:  ['MP3',        /\bmp3\b/i],
     flac: ['FLAC',       /\bflac\b/i],
@@ -4217,27 +4383,28 @@ function curSectionName() {
 
 function facetScope() {
     if (search.active && search.scope === 'all') return 'mixed';
-    if (!search.active && (view.key === 'favs' || view.key === 'releaser')) return 'mixed';
+    if (!search.active && (view.key === 'favs' || view.key === 'releaser' || view.key === 'project' || view.key === 'account')) return 'mixed';
     const n = curSectionName();
-    return (n && sectionKindOf(n)) || 'home';
+    if (n === PROJECT_SECTION) return 'mixed';
+    return (n && (sectionKindOf(n) || 'video')) || 'home';
 }
 
 function facetsFor() {
     const sc = facetScope(), n = curSectionName();
     const vid = sc === 'home' || sc === 'video';
-    return { vid, complete: vid && !FILM_ONLY.has(n), type: sc === 'home', fmts: FMT_BY_SECTION[n] || [] };
+    return { vid, rated: vid && (sc === 'home' || !NO_RATING_SECTIONS.has(n)), complete: vid && (sc === 'home' || SEASON_SECTIONS.has(n)), type: sc === 'home', fmts: FMT_BY_SECTION[n] || [] };
 }
 
-const advActive = f => !!((f.vid && (filters.minVote > 0 || filters.codec !== 'all')) || filters.yFrom || filters.yTo || filters.releaser || filters.sizeMin || filters.sizeMax);
+const advActive = f => !!((f.rated && (filters.minVote > 0 || filters.genre !== 'all')) || (f.vid && filters.codec !== 'all') || filters.yFrom || filters.yTo || filters.releaser || filters.sizeMin || filters.sizeMax);
 
 function anyFilter() {
     const f = facetsFor();
     return hideSeen
-        || (f.vid && (filters.q4k || filters.hdr || filters.ita))
+        || (f.vid && (filters.res !== 'all' || filters.ita))
         || (f.complete && filters.complete)
         || (f.type && filters.type !== 'all')
         || f.fmts.includes(filters.fmt)
-        || (f.vid && filters.genre !== 'all')
+        || (f.rated && filters.genre !== 'all')
         || advActive(f);
 }
 
@@ -4247,7 +4414,6 @@ const isCompleteRelease = it =>
 
 const fmtHaystack = it => [it.rawTitle, it.mediaInfo || '', ...(it.magnets || []).map(m => m.dn || '')].join(' ');
 
-// Ritorna un predicato (o null se nessun filtro e' attivo)
 function makeFilter() {
     if (!anyFilter()) return null;
     const f = facetsFor();
@@ -4256,14 +4422,17 @@ function makeFilter() {
     return it => {
         const m = it.meta;
         if (f.vid) {
-            if (filters.q4k && !m.is4k) return false;
-            if (filters.hdr && !(m.isDV || m.isHDR)) return false;
+            if (filters.res !== 'all') {
+                const rk = m.is4k ? '4k' : m.is1080p ? '1080' : m.is720p ? '720' : 'sd';
+                if (rk !== filters.res) return false;
+            }
+
             if (filters.ita && !m.audioLangs.includes('ITA')) return false;
-            if (filters.minVote > 0 && !(it.vote >= filters.minVote)) return false;
+            if (f.rated && filters.minVote > 0 && !(it.vote >= filters.minVote)) return false;
             if (filters.codec === 'av1' && !m.isAv1) return false;
             if (filters.codec === 'hevc' && !m.isH265) return false;
             if (filters.codec === 'avc' && !m.isH264) return false;
-            if (filters.genre !== 'all' && !itemGenres(it).some(g => normT(g) === filters.genre)) return false;
+            if (f.rated && filters.genre !== 'all' && !itemGenres(it).some(g => normT(g) === filters.genre)) return false;
         }
         if (f.complete && filters.complete && !isCompleteRelease(it)) return false;
         if (f.type) {
@@ -4294,7 +4463,10 @@ function renderFacets() {
     const f = facetsFor();
     const chip = (attr, label, on, cls = '') => `<button class="seer-facet ${on ? 'active' : ''} ${cls}" ${attr}>${label}</button>`;
     const groups = [];
-    if (f.vid) groups.push(FACETS.filter(([k]) => k !== 'complete' || f.complete).map(([k, l]) => chip(`data-facet="${k}"`, l, filters[k])).join(''));
+    if (f.vid) {
+        groups.push('<span class="seer-adv-note">🎞️ Qualità</span>' + RES_FACETS.map(([k, l]) => chip(`data-res="${k}"`, l, filters.res === k)).join(''));
+        if (f.complete) groups.push(FACETS.map(([k, l]) => chip(`data-facet="${k}"`, l, filters[k])).join(''));
+    }
     if (f.type) groups.push(chip('data-ftype="film"', '🗂️ Solo Film', filters.type === 'film') + chip('data-ftype="series"', '📺 Solo Serie', filters.type === 'series'));
     if (f.fmts.length) groups.push(f.fmts.map(k => chip(`data-fmt="${k}"`, FMT[k][0], filters.fmt === k)).join(''));
     const act = advActive(f);
@@ -4306,13 +4478,12 @@ function renderFacets() {
     box.innerHTML = groups.join('<span class="seer-facet-sep"></span>');
 }
 
-// Pannello filtri avanzati: l'HTML e' statico, qui si sincronizzano solo valori e visibilita'
 function updateAdv() {
     const box = $('seer-adv');
     if (!box) return;
     box.classList.toggle('open', advOpen);
     const f = facetsFor();
-    $('seer-adv-vote-wrap').style.display = f.vid ? '' : 'none';
+    $('seer-adv-vote-wrap').style.display = f.rated ? '' : 'none';
     $('seer-adv-codec-wrap').style.display = f.vid ? '' : 'none';
     const setVal = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.value = v; };
     setVal('seer-adv-vote', filters.minVote || 0);
@@ -4328,12 +4499,11 @@ function updateAdv() {
     const dl = $('seer-adv-rel-list');
     if (dl && dl.dataset.sig !== sig) { dl.dataset.sig = sig; dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join(''); }
 
-    $('seer-adv-note').textContent = (f.vid && filters.minVote > 0)
+    $('seer-adv-note').textContent = (f.rated && filters.minVote > 0)
         ? (getTmdbKey() ? 'Carico i voti TMDb dei titoli in background…' : 'Il filtro voto richiede la chiave TMDb (⚙️ Impostazioni).')
         : '';
 }
 
-// Per filtrare per voto serve aver letto i post: li carica a piccoli lotti (poi riesegue il render)
 let warmTimer = null;
 const needsPostData = () => (filters.minVote > 0 && !!getTmdbKey()) || !!filters.sizeMin || !!filters.sizeMax || filters.genre !== 'all';
 function warmRatings(items) {
@@ -4349,22 +4519,7 @@ function warmRatings(items) {
         }, 500);
     });
 }
-function warmRatingsOld(items) {
-    if (!(filters.minVote > 0) || !getTmdbKey()) return;
-    const todo = items.filter(it => !it.posterTried && !ratingTried.has(it.id) && sectionKindOf(it.type) === 'video').slice(0, 24);
-    if (!todo.length) return;
-    todo.forEach(it => ratingTried.add(it.id));
-    Promise.all(todo.map(it => scrapeTopicData(it).catch(() => null))).then(() => {
-        clearTimeout(warmTimer);
-        warmTimer = setTimeout(() => {
-            if (filters.minVote > 0 && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue());
-        }, 500);
-    });
-}
 
-// =====================================================================
-//  VERSION STACKING nella lista (D1)
-// =====================================================================
 function stackVersions(sorted, pred) {
     const keys = versionKeyMap(sorted);
     const groups = new Map();
@@ -4387,9 +4542,6 @@ function stackVersions(sorted, pred) {
     return out;
 }
 
-// =====================================================================
-//  VISTA RELEASER (sezione 4)
-// =====================================================================
 const relCatOf = it => {
     const t = it.type;
     if (t === 'Film' || t === 'Anime Movies' || t === 'Cartoon Movies') return 'film';
@@ -4401,7 +4553,6 @@ const relSearchUrl = r => r.id
     ? `/search.php?author_id=${encodeURIComponent(r.id)}&sr=topics&sf=firstpost&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`
     : `/search.php?keywords=&author=${encodeURIComponent(r.name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0&submit=Cerca`;
 
-// Small pool for profile lookups (not subject to phpBB's search flood limit)
 const avPool = { active: 0, q: [] };
 function avRun(task) {
     return new Promise(resolve => {
@@ -4419,7 +4570,6 @@ function avRun(task) {
 
 const AV_SKIP = '#username_logged_in, .header-profile, #page-header, .navbar, .headerbar, .site-description';
 
-// Free lookups: any post we already scraped carries the author's id + avatar
 function avatarFromRegistry(id, name) {
     const n = relKey(name);
     for (const it of registry.values()) {
@@ -4482,7 +4632,6 @@ async function fetchAvatar(id, name) {
     });
 }
 
-// r = { name, id? }: resolves the user id from the name when the table had no profile link
 async function getRelAvatar(r) {
     let id = r.id || null;
     if (!id) { id = await resolveUserId(r.name); if (id) r.id = id; }
@@ -4524,36 +4673,10 @@ function renderRelPanel() {
     if (im) im.addEventListener('error', () => { im.parentElement.textContent = '👤'; });
 }
 
-async function loadReleaserPage() {
-    const mine = rel;
-    if (!mine || mine.loading || mine.exhausted) return;
-    mine.loading = true;
-    renderRelPanel();
-    try {
-        const page = await fetchSearchPage(mine.nextUrl || relSearchUrl(mine), { relaxed: true, fallbackType: null });
-        if (rel !== mine) return;
-        if (page.flood) {
-            mine.error = true;
-            toast('⏳ Limite frequenza ricerche del forum raggiunto: riprova tra qualche secondo', 'warn', 4500);
-            return;
-        }
-        mine.error = false;
-        const own = page.items.filter(it => !it.author || it.author.toLowerCase() === mine.name.toLowerCase());
-        mine.items = uniqById([...mine.items, ...own]);
-        if (page.total && !mine.total) mine.total = page.total;
-        mine.nextUrl = page.nextUrl;
-        mine.exhausted = !page.nextUrl;
-    } catch (e) {
-        console.error('Releaser load failed', e);
-        if (rel === mine) { mine.error = true; toast('Caricamento del releaser non riuscito', 'err'); }
-    } finally {
-        mine.loading = false;
-        if (rel === mine) { renderRelPanel(); if (!search.active) renderDeck(localFilterValue()); }
-    }
-}
+async function loadReleaserPage() {}
+async function loadRelSearchPage() {}
+async function loadMoreReleaser() {}
 
-// ---- Barra di ricerca nella pagina del releaser ----
-// digitare = filtra le release già caricate; Invio = cerca tra TUTTE le sue release sul forum
 const relKeywordUrl = (r, q) =>
     `/search.php?keywords=${encodeURIComponent(q)}&terms=all&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
     (r.id ? `&author_id=${encodeURIComponent(r.id)}` : `&author=${encodeURIComponent(r.name)}`) + `&submit=Cerca`;
@@ -4564,59 +4687,26 @@ function updateRelHint() {
     if (!rel || view.key !== 'releaser' || search.active) { h.textContent = ''; return; }
     const q = (rel.q || '').trim();
     if (rel.sq) {
-        const n = rel.sq.items.length;
-        h.textContent = rel.sq.loading
-            ? `🌐 Ricerca sul forum… (${n} trovate)`
-            : `🌐 ${n}${rel.sq.exhausted ? '' : '+'} risultati sul forum per "${rel.sq.query}"`;
+        h.textContent = PG.loading
+            ? '🌐 Ricerca sul forum…'
+            : `🌐 ${rel.sq.items.length ? 'Risultati' : 'Nessun risultato'} sul forum per "${rel.sq.query}"${PG.total > 1 ? ' · ' + PG.total + ' pagine' : ''}`;
     } else if (q.length >= 3) {
-        h.textContent = `🔎 Filtro sulle ${rel.items.length} release già caricate — premi Invio per cercare tra tutte le sue release.`;
+        h.textContent = `🔎 Filtro sulle ${rel.items.length} release di questa pagina — premi Invio per cercare tra tutte le sue release.`;
     } else {
         h.textContent = '';
     }
 }
 
-// Messaggio per lista vuota nella vista releaser (null = usa quelli standard)
 function relEmptyMsg() {
     if (!rel) return null;
     const q = (rel.q || '').trim();
     if (rel.sq) {
-        if (rel.sq.loading) return `🔍 Ricerca di "${esc(rel.sq.query)}" tra le release di ${esc(rel.name)}…`;
+        if (PG.loading) return `🔍 Ricerca di "${esc(rel.sq.query)}" tra le release di ${esc(rel.name)}…`;
         if (!rel.sq.items.length) return `Nessun risultato per "${esc(rel.sq.query)}" tra le release di ${esc(rel.name)}.`;
         return null;
     }
-    if (q.length >= 3 && rel.items.length) return `Nessuna release già caricata corrisponde a "${esc(q)}".<br>Premi <b>Invio</b> per cercare tra tutte le release di ${esc(rel.name)}.`;
+    if (q.length >= 3 && rel.items.length) return `Nessuna release di questa pagina corrisponde a "${esc(q)}".<br>Premi <b>Invio</b> per cercare tra tutte le release di ${esc(rel.name)}.`;
     return null;
-}
-
-async function loadRelSearchPage() {
-    const mine = rel, sq = mine && mine.sq;
-    if (!sq || sq.loading || sq.exhausted) return;
-    sq.loading = true;
-    renderRelPanel();
-    updateRelHint();
-    try {
-        const page = await fetchSearchPage(sq.nextUrl || relKeywordUrl(mine, sq.query), { relaxed: true, fallbackType: null });
-        if (rel !== mine || mine.sq !== sq) return;
-        if (page.flood) {
-            sq.exhausted = true;
-            toast('⏳ Limite frequenza ricerche del forum raggiunto: attendi qualche secondo e premi Invio di nuovo', 'warn', 4500);
-            return;
-        }
-        const own = page.items.filter(it => !it.author || relKey(it.author) === relKey(mine.name));
-        sq.items = uniqById([...sq.items, ...own]);
-        sq.nextUrl = page.nextUrl;
-        sq.exhausted = !page.nextUrl;
-    } catch (e) {
-        console.error('Releaser search failed', e);
-        if (rel === mine && mine.sq === sq) { sq.exhausted = true; toast('Ricerca non riuscita: controlla la connessione', 'err'); }
-    } finally {
-        sq.loading = false;
-        if (rel === mine && mine.sq === sq) {
-            renderRelPanel();
-            if (!search.active) renderDeck(localFilterValue(), true);
-            updateRelHint();
-        }
-    }
 }
 
 function relRunSearch() {
@@ -4624,14 +4714,14 @@ function relRunSearch() {
     const q = ($('seer-rel-q').value || '').trim();
     rel.q = q;
     if (q.length < 3) {
+        const had = !!rel.sq;
         rel.sq = null;
         if (q) toast('Scrivi almeno 3 caratteri per cercare', 'warn');
-        renderDeck(localFilterValue(), true);
+        if (had) loadPage(1); else renderDeck(localFilterValue(), true);
         return;
     }
-    rel.sq = { query: q, items: [], nextUrl: null, exhausted: false, loading: false };
-    loadRelSearchPage();
-    renderDeck('', true);
+    rel.sq = { query: q, items: [], nextUrl: null, exhausted: true, loading: false };
+    loadPage(1);
 }
 
 async function openReleaser(name, id, avatar) {
@@ -4641,36 +4731,25 @@ async function openReleaser(name, id, avatar) {
     searchToken++;
     search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
     $('seer-search-input').value = '';
-    const prev = view.key === 'releaser' ? (rel && rel.prev) : { key: view.key, section: view.section };
-    const mine = rel = { name, id: id || null, avatar: avatar || null, items: [], total: 0, cat: 'all', q: '', sq: null, nextUrl: null, exhausted: false, loading: false, error: false, prev: prev || { key: 'home', section: null } };
+    const prev = view.key === 'releaser' ? (rel && rel.prev) : { key: view.key, section: view.section, page: PG.lastViewPage || 1 };
+    const mine = rel = { name, id: id || null, avatar: avatar || null, items: [], total: 0, cat: 'all', q: '', sq: null, nextUrl: null, exhausted: true, loading: false, error: false, prev: prev || { key: 'home', section: null } };
     view = { key: 'releaser', section: null };
     { const ri = $('seer-rel-q'); if (ri) ri.value = ''; }
     $('seer-sidebar').classList.remove('open');
     $('mirseer-app').scrollTop = 0;
+    const wantPage = PG.want || 1;
+    PG.want = 0;
+    PG.items = [];
+    PG.total = 0;
     updateChrome();
-    showSkeleton();
-
     if (!mine.avatar) getRelAvatar({ name, id }).then(src => { if (rel === mine && src) { mine.avatar = src; renderRelPanel(); } });
-
-    for (let i = 0; i < INITIAL_PAGES && rel === mine && !mine.exhausted && !mine.error; i++) await loadReleaserPage();
+    await loadPage(wantPage);
 }
 
-async function loadMoreReleaser() {
-    $('seer-load-more-btn').innerText = 'Caricamento in corso...';
-    await loadReleaserPage();
-    updateLoadMore();
-}
-
-// =====================================================================
-//  LISTA / RENDER
-// =====================================================================
-// =====================================================================
-//  FILTRI GLOBALI: releaser via ricerca sul forum + caricamento automatico pagine
-// =====================================================================
 const GX_VIEWS = ['home', 'films', 'series', 'section'];
 const gxKey = () => (filters.releaser || '').trim().toLowerCase() + '|' + currentScope().fids.join(',');
 const gxApplies = () => !search.active && GX_VIEWS.includes(view.key)
-    && (filters.releaser || '').trim().length >= 3 && gx.key === gxKey();
+    && false;
 
 const relAuthorUrl = (name, fids) =>
     `/search.php?keywords=&author=${encodeURIComponent(name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
@@ -4689,7 +4768,6 @@ async function loadGxPage() {
         g.items = uniqById([...g.items, ...page.items]);
         g.nextUrl = page.nextUrl;
         if (!page.nextUrl) {
-            // nessun autore con quel nome: prova come tag crew nel titolo della release
             if (g.mode === 'author' && !g.items.length) { g.mode = 'title'; g.nextUrl = null; }
             else g.exhausted = true;
         }
@@ -4704,6 +4782,7 @@ async function loadGxPage() {
 
 let gxTimer = null;
 function gxStart() {
+    return;
     clearTimeout(gxTimer);
     gxTimer = setTimeout(() => {
         const name = (filters.releaser || '').trim();
@@ -4715,11 +4794,11 @@ function gxStart() {
     }, 600);
 }
 
-// Con filtri attivi e pochi risultati, scarica altre pagine del forum finche' non ce ne sono abbastanza
 const wantMore = () => anyFilter() || ((view.key === 'films' || view.key === 'series') && !search.active);
 const minNeeded = () => anyFilter() ? AUTO_MIN : ((view.key === 'films' || view.key === 'series') ? 40 : 0);
 
 async function autoPage() {
+    return;
     if (autoBusy || search.active || !wantMore() || !GX_VIEWS.includes(view.key)) return;
     if (gxApplies() && gx.loading) return;
     autoBusy = true;
@@ -4738,8 +4817,10 @@ async function autoPage() {
 
 function getVisibleItems() {
     let base;
-    if (search.active) base = search.items;
+    if (isPagedView()) base = PG.items;
+    else if (search.active) base = search.items;
     else if (view.key === 'favs') base = uniqById([...wlNew.values(), ...favItems()]);
+    else if (view.key === 'project') base = proj ? projVisible() : [];
     else if (view.key === 'releaser') base = rel ? (rel.sq ? rel.sq.items : rel.items) : [];
     else if (view.key === 'section') base = currentSectionStore().items;
     else {
@@ -4754,10 +4835,10 @@ function getVisibleItems() {
     lastBase = base;
     lastBaseCount = base.length;
 
-    let sorted = applySort(base);
+    let sorted = view.key === 'project' ? base.slice() : applySort(base);
     if (!search.active && view.key === 'releaser' && rel && rel.cat !== 'all') sorted = sorted.filter(it => relCatOf(it) === rel.cat);
     const pred = makeFilter();
-    if (!search.active && (view.key === 'favs' || view.key === 'releaser')) {
+    if (!search.active && (view.key === 'favs' || view.key === 'releaser' || view.key === 'project')) {
         sorted.forEach(x => { x._vers = null; });
         return pred ? sorted.filter(pred) : sorted;
     }
@@ -4779,6 +4860,7 @@ function syncSidebarActive() {
 }
 
 function updateLoadMore() {
+    { const _b = $('seer-load-more-btn'); if (_b) _b.style.display = 'none'; renderPager(); return; }
     const btn = $('seer-load-more-btn');
     let show = true, label = '📥 Carica Altre Uscite';
     if (search.active) { show = !!search.nextUrl; label = '📥 Carica altri risultati'; }
@@ -4840,6 +4922,8 @@ function updateChrome() {
     else if (view.key === 'series') t.textContent = '📺 Serie TV';
     else if (view.key === 'favs') t.textContent = '⭐ Watchlist';
     else if (view.key === 'releasers') t.textContent = '🏆 Releasers';
+    else if (view.key === 'account') t.textContent = '👤 Il mio account';
+    else if (view.key === 'project' && proj) t.textContent = '🗂️ ' + proj.item.displayTitle;
     else if (view.key === 'section') t.textContent = iconFor(view.section.name) + ' ' + view.section.name;
     else t.textContent = '🆕 Ultime Release';
 
@@ -4856,16 +4940,21 @@ function updateChrome() {
 
     document.querySelectorAll('#seer-view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === viewMode));
     renderGenres(); renderWlPanel(); syncHash();
-    ['seer-facets', 'seer-genres', 'seer-adv', 'seer-sel-btn', 'seer-view-toggle', 'seer-sort-select'].forEach(id => { const e = $(id); if (e) e.style.display = (view.key === 'releasers' && !search.active) ? 'none' : ''; });
+    ['seer-facets', 'seer-genres', 'seer-adv', 'seer-sel-btn', 'seer-view-toggle', 'seer-sort-select'].forEach(id => { const e = $(id); if (e) e.style.display = ((view.key === 'releasers' || view.key === 'account' || view.key === 'project') && !search.active) ? 'none' : ''; });
     renderFacets();
     renderRelPanel();
     updateAdv();
     syncSidebarActive();
     updateHeroVisibility();
+    renderProjHead();
+    const appEl = $('mirseer-app');
+    if (appEl) appEl.dataset.seerView = search.active ? 'search' : view.key;
+    pjFabUpdate();
     updateLoadMore();
 }
 
 function fillRow(row, item) {
+    const isProj = item.type === PROJECT_SECTION || item.forumName === PROJECT_SECTION;
     const m = item.meta;
     const kind = effKind(item);
     const looksVideo = kind === 'video' || (!kind && VIDEO_TYPES.has(item.type));
@@ -4879,11 +4968,15 @@ function fillRow(row, item) {
 
     row.classList.toggle('is-card', grid);
     row.classList.toggle('is-seen', seen);
+    row.classList.toggle('is-proj', isProj);
+    if (isProj) row.dataset.topicType = 'Progetti e Collezioni';
 
     let badgesHtml = '';
     let specsHtml = '';
-
-    if (kind === 'text') {
+    if (isProj) {
+        badgesHtml = '<span class="seer-tag tag-season" style="background:rgba(99,102,241,0.25);color:#c7d2fe;border:1px solid rgba(99,102,241,0.45)">🗂️ COLLEZIONE</span>';
+        specsHtml = '<span class="seer-preview">Apri per esplorare tutti i titoli della collezione.</span>';
+    } else if (kind === 'text') {
         badgesHtml = `<span class="seer-tag tag-text">📝 Testo</span>`;
         const preview = (item.synopsis || item.body || '').replace(/\s+/g, ' ').trim().slice(0, 190);
         specsHtml = `<span class="seer-preview">${esc(preview || 'Post testuale: apri per leggere il contenuto.')}</span>`;
@@ -4927,7 +5020,7 @@ function fillRow(row, item) {
     if (grid) {
         row.innerHTML = `
             <div class="seer-poster-wrap">${posterHtml}<div class="seer-card-badges">${badgesHtml}</div>${favBtn}${selBox}</div>
-            <div class="seer-info"><span class="seer-title" title="${esc(item.rawTitle)}">${esc(item.displayTitle)}</span></div>
+            <div class="seer-info"><span class="seer-title" title="${esc(item.rawTitle)}">${esc(isProj ? item.cleanTitle.replace(/\s+(?:SD|TESTO|RIP|VIDEO)\b/gi, '').trim() : item.displayTitle)}</span></div>
             <div class="seer-card-meta"><span>${esc(item.type)}${item.year ? ' · ' + esc(item.year) : ''}${item.sizeBytes ? ' · ' + esc(fmtSize(item.sizeBytes)) : ''}</span><span>👁️ ${esc(fmtViews(item.views || 0))}</span></div>
         `;
         return;
@@ -4937,7 +5030,7 @@ function fillRow(row, item) {
         ${selBox}<div class="seer-poster-wrap">${posterHtml}</div>
         <div class="seer-info">
             <div class="seer-title-line">
-                <span class="seer-title" title="${esc(item.rawTitle)}">${esc(item.displayTitle)}</span>
+                <span class="seer-title" title="${esc(item.rawTitle)}">${esc(isProj ? item.cleanTitle.replace(/\s+(?:SD|TESTO|RIP|VIDEO)\b/gi, '').trim() : item.displayTitle)}</span>
                 ${badgesHtml}
             </div>
             <div class="seer-specs-line">${specsHtml}</div>
@@ -4955,7 +5048,10 @@ const groupLabel = it => (it.forumId && forumToSection.get(it.forumId)) || secti
 
 function renderDeck(filterQuery = '', noAuto = false) {
     cancelQueued();
+    if (view.key === 'account' && !search.active) { updateChrome(); renderAccountPage(); return; }
+    if (view.key === 'project' && !search.active) { updateChrome(); renderProjDoc(); return; }
     const listContainer = $('seer-main-list');
+    if (posterObserver) posterObserver.disconnect();
     listContainer.innerHTML = '';
     listContainer.classList.toggle('seer-grid', viewMode === 'grid');
 
@@ -4964,15 +5060,16 @@ function renderDeck(filterQuery = '', noAuto = false) {
     if (filterQuery && !search.active) displayed = displayed.filter(item => fuzzyScore(item, filterQuery) > 0);
 
     $('seer-count').innerText = search.active
-        ? `${displayed.length} risultati per "${search.query}"`
-        : (view.key === 'releaser' ? `${displayed.length} release mostrate` : `${displayed.length} uscite mostrate`);
+        ? `${displayed.length} risultati per "${search.query}"${pgSuffix()}`
+        : (view.key === 'releaser' ? `${displayed.length} release mostrate${pgSuffix()}` : `${displayed.length} uscite mostrate${pgSuffix()}`);
 
     if (displayed.length === 0) {
         lastDisplayed = [];
-        if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Watchlist vuota: premi ☆ su una release, oppure ➕ Segui da una scheda per seguire un releaser o una serie.');
+        if (view.key === 'project' && !search.active) showListMessage(projEmptyMsg());
+        else if (view.key === 'favs' && !search.active && lastBaseCount === 0) showListMessage('Watchlist vuota: premi ☆ su una release, oppure ➕ Segui da una scheda per seguire un releaser o una serie.');
         else if (view.key === 'releaser' && !search.active && rel && relEmptyMsg()) showListMessage(relEmptyMsg());
         else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
-        else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita corrisponde ai filtri attivi. Prova ad azzerarli o a caricare altre uscite.');
+        else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita in questa pagina corrisponde ai filtri attivi. Prova ad azzerarli o a cambiare pagina.');
         else showListMessage('Nessuna uscita da mostrare qui.');
         if (!noAuto) setTimeout(autoPage, 0);
         warmRatings(lastBase);
@@ -5041,7 +5138,7 @@ const localFilterValue = () => {
 };
 
 async function setView(key, section = null) {
-    const savedScroll = scrollMemory.get(viewKeyOf(key, section)) || 0;
+    const savedScroll = (key === 'home' || key === 'films' || key === 'series' || key === 'section' || key === 'releaser' || key === 'project' || key === 'account') ? 0 : (scrollMemory.get(viewKeyOf(key, section)) || 0);
     await setViewCore(key, section);
     if (view.key !== key) return;
     if (savedScroll) requestAnimationFrame(() => $('mirseer-app').scrollTo({ top: savedScroll, behavior: 'instant' }));
@@ -5049,10 +5146,9 @@ async function setView(key, section = null) {
 }
 async function setViewCore(key, section = null) {
     const token = ++viewToken;
+    pgToken++;
     rel = null;
     gx = newGx();
-    if (filters.releaser) gxStart();
-
     if (search.active) {
         searchToken++;
         search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
@@ -5062,39 +5158,29 @@ async function setViewCore(key, section = null) {
     selected.clear();
     $('seer-sidebar').classList.remove('open');
     $('mirseer-app').scrollTop = 0;
+    const wantPage = PG.want || 1;
+    PG.want = 0;
+    PG.loading = false;
 
-    if (key === 'section') {
-        let store = sections.get(String(section.id));
-        if (!store) {
-            store = { items: [], group: null, exhausted: false, loaded: false };
-            sections.set(String(section.id), store);
-        }
-        if (!store.loaded) {
-            updateChrome();
-            showSkeleton();
-            await loadSection(section, store, 1);
-            if (token !== viewToken) return;
-            store.bg = (async () => {
-                for (let p = 1; p < INITIAL_PAGES && !groupDone(store.group); p++) {
-                    await loadSection(section, store, 1, true);
-                    if (view.key === 'section' && view.section && String(view.section.id) === String(section.id) && !search.active) renderDeck(localFilterValue(), true);
-                }
-            })();
-        }
-       } else if (key !== 'favs' && key !== 'releasers' && !main.loaded) {
+    if (key === 'account') { cancelQueued(); updateChrome(); renderAccountPage(); return; }
+    if (key === 'project') { cancelQueued(); updateChrome(); renderDeck(localFilterValue(), true); return; }
+
+    if (key === 'films' || key === 'series' || key === 'section' || key === 'home') {
+        PG.items = [];
+        PG.total = 0;
         updateChrome();
-        showSkeleton();
-        await loadMain();
-        if (token !== viewToken) return;
+        const pagePromise = loadPage(wantPage);
+        if (key === 'home' && !main.loaded && !main.starting) {
+            main.starting = loadMain().catch(e => console.error('loadMain', e)).finally(() => { main.starting = null; });
+        }
+        await pagePromise;
+        return;
     }
     renderDeck();
-    if (view.key === 'releasers' && !search.active) { cancelQueued(); updateChrome(); renderReleasersPage(); return; }
+    if (view.key === 'releasers' && !search.active) { cancelQueued(); updateChrome(); renderReleasersPage(); startRelRefresh(); return; }
     if (key === 'releasers') startRelRefresh();
 }
 
-// =====================================================================
-//  CARICAMENTO FORUM (con pausa anti-flood e buffer multi-pagina)
-// =====================================================================
 async function fetchForumTopics(forumId, typeName, start = 0, relaxed = false) {
     try {
         await netGate();
@@ -5165,8 +5251,6 @@ const uniqById = arr => {
     return arr.filter(i => (seen.has(String(i.id)) ? false : (seen.add(String(i.id)), true)));
 };
 
-// Anti-bump: carica un buffer di INITIAL_PAGES pagine (start=0, 25, 50) cosi' le release nuove
-// spinte indietro da topic "rinfrescati" vengono comunque recuperate e ordinate per data di creazione.
 async function loadMain() {
     main.group = makeGroup([
         makeCursor(FILM_FORUM_ID, 'Film', false, true),
@@ -5176,12 +5260,11 @@ async function loadMain() {
     main.exhausted = groupDone(main.group);
     main.loaded = true;
 
-    // anti-bump pages keep loading in the background, the list re-sorts as they arrive
     main.bg = (async () => {
-        for (let p = 1; p < INITIAL_PAGES && !groupDone(main.group); p++) {
+        for (let p = 1; settings.heroEnabled && p < INITIAL_PAGES && !groupDone(main.group); p++) {
             main.items = uniqById([...main.items, ...await pullGroup(main.group)]);
             main.exhausted = groupDone(main.group);
-            if (['home', 'films', 'series'].includes(view.key) && !search.active) renderDeck(localFilterValue(), true);
+            if (['home', 'films', 'series'].includes(view.key) && !search.active && !isPagedView()) renderDeck(localFilterValue(), true);
         }
     })();
     if (settings.heroEnabled) buildHero();
@@ -5282,9 +5365,6 @@ async function loadSidebar() {
     renderSidebarSections();
 }
 
-// =====================================================================
-//  RICERCA SUL FORUM (+ ripiego fuzzy locale)
-// =====================================================================
 function buildSearchUrl(query, fids) {
     const q = query.trim();
     const forumParams = fids.map(id => `&f[]=${id}&fid[]=${id}`).join('');
@@ -5294,6 +5374,7 @@ function buildSearchUrl(query, fids) {
 async function fetchSearchPage(url, sc) {
     await netGate();
     const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const html = await resp.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -5313,51 +5394,23 @@ async function runSearch(query) {
     const token = ++searchToken;
     cancelQueued();
     const sc = resolveSearchScope();
-    showListMessage(`🔍 Ricerca "${esc(query)}" in ${esc(sc.label)}...`);
-
-    try {
-        const page = await fetchSearchPage(buildSearchUrl(query, sc.fids), sc);
-        if (token !== searchToken) return;
-
-        if (page.flood) {
-            toast('⏳ Limite frequenza ricerche del forum raggiunto: attendi qualche secondo e riprova', 'warn', 4500);
-            showListMessage('⏳ Il forum limita la frequenza delle ricerche. Attendi qualche secondo e riprova.', 'warn');
-            return;
+    const pageWant = PG.wantSearch || 1;
+    PG.wantSearch = 0;
+    search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: [], nextUrl: null, sc, fuzzy: false };
+    await loadPage(pageWant);
+    if (token !== searchToken || !search.active) return;
+    if (!PG.items.length && !PG.err && !PG.loading) {
+        const fz = fuzzyPool(query, sc);
+        if (fz.length) {
+            search = { ...search, items: fz, fuzzy: true };
+            renderDeck();
+        } else {
+            showListMessage(`Nessun risultato per "${esc(query)}" in ${esc(sc.label)}.`);
         }
-
-        // Nessun risultato esatto: ripiega sulla ricerca fuzzy tra i titoli gia' caricati (tolleranza ai refusi)
-        if (!page.items.length) {
-            const fz = fuzzyPool(query, sc);
-            if (fz.length) {
-                search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: fz, nextUrl: null, sc, fuzzy: true };
-                renderDeck();
-                return;
-            }
-        }
-
-        search = { active: true, scope: sc.mode === 'all' ? 'all' : 'scoped', query, label: sc.label, items: page.items, nextUrl: page.nextUrl, sc, fuzzy: false };
-        renderDeck();
-        if (page.items.length === 0) showListMessage(`Nessun risultato per "${esc(query)}" in ${esc(sc.label)}.`);
-    } catch (e) {
-        if (token !== searchToken) return;
-        console.error('Search failed', e);
-        toast('Richiesta di ricerca non riuscita: controlla la connessione', 'err');
-        showListMessage('Richiesta non riuscita. Verifica la connessione al forum.', 'err');
     }
 }
 
-async function loadMoreSearch() {
-    if (!search.nextUrl) return;
-    const token = searchToken;
-    $('seer-load-more-btn').innerText = 'Caricamento in corso...';
-    try {
-        const page = await fetchSearchPage(search.nextUrl, search.sc);
-        if (token !== searchToken) return;
-        search.items = uniqById([...search.items, ...page.items]);
-        search.nextUrl = page.nextUrl;
-    } catch (e) { console.error(e); toast('Caricamento dei risultati non riuscito', 'err'); }
-    renderDeck();
-}
+async function loadMoreSearch() {}
 
 function resetSearchState() {
     searchToken++;
@@ -5365,11 +5418,328 @@ function resetSearchState() {
 }
 
 function exitSearchMode(filterQuery = '') {
+    const was = search.active;
+    if (was) pgToken++;
     resetSearchState();
+    if (was && isPagedView()) { loadPage(PG.lastViewPage || 1); return; }
     renderDeck(filterQuery);
 }
 
-// Performance: the browser skips layout/paint of off-screen rows
+const PG = { page: 1, total: 0, per: PAGE_SIZE, items: [], loading: false, err: '', key: '', want: 0, wantSearch: 0, lastViewPage: 1 };
+const pageCache = new Map();
+const perByKey = new Map();
+const PG_TTL = 180000;
+let pgToken = 0;
+let pgOpenAfterLoad = '';
+
+const SERVER_SORT = { recent: ['t', 'd'], activity: ['t', 'd'], size: ['t', 'd'], views: ['v', 'd'], replies: ['r', 'd'], title: ['s', 'a'] };
+
+const isPagedView = () => {
+    if (search.active) return !search.fuzzy;
+    return view.key === 'home' || view.key === 'films' || view.key === 'series' || view.key === 'section' || (view.key === 'releaser' && !!rel);
+};
+const pgSuffix = () => (isPagedView() && PG.total > 1 ? ` · pagina ${PG.page}/${PG.total}` : '');
+
+function pgSource() {
+    const f = SERVER_SORT[sortMode] || ['t', 'd'];
+    if (search.active && !search.fuzzy) {
+        const sc = search.sc;
+        const base = buildSearchUrl(search.query, sc.fids);
+        return { kind: 'search', key: 's|' + search.query + '|' + sc.fids.join(','), url: s0 => base + (s0 ? '&start=' + s0 : ''), type: 'auto', relaxed: sc.relaxed, fallbackType: sc.fallbackType };
+    }
+    if (view.key === 'releaser' && rel) {
+        const base = rel.sq ? relKeywordUrl(rel, rel.sq.query) : relSearchUrl(rel);
+        return { kind: 'search', key: 'r|' + (rel.id || rel.name) + '|' + (rel.sq ? rel.sq.query : ''), url: s0 => base + (s0 ? '&start=' + s0 : ''), type: 'auto', relaxed: true, fallbackType: null };
+    }
+    if (view.key === 'home') {
+        const hUrl = (fid, s0) => `/viewforum.php?f=${fid}&start=${s0}&sk=${f[0]}&sd=${f[1]}&st=0`;
+        const hPart = (fid, type) => ({ kind: 'forum', id: fid, key: 'f|' + fid + '|' + f.join(''), url: s0 => hUrl(fid, s0), urlFor: hUrl, sub: false, type, relaxed: false, fallbackType: type });
+        const parts = [hPart(FILM_FORUM_ID, 'Film'), hPart(SERIES_FORUM_ID, 'Serie TV')];
+        return { kind: 'home', key: 'h|' + f.join(''), parts, url: parts[0].url, type: 'auto', relaxed: false, fallbackType: null };
+    }
+    let id, type, relaxed;
+    if (view.key === 'films') { id = FILM_FORUM_ID; type = 'Film'; relaxed = false; }
+    else if (view.key === 'series') { id = SERIES_FORUM_ID; type = 'Serie TV'; relaxed = false; }
+    else if (view.key === 'section' && view.section) { id = view.section.id; type = view.section.name; relaxed = true; }
+    else return null;
+    const urlFor = (fid, s0) => `/viewforum.php?f=${fid}&start=${s0}&sk=${f[0]}&sd=${f[1]}&st=0`;
+    const secDef = sectionList.find(s => String(s.fid) === String(id));
+    return { kind: 'forum', id, key: 'f|' + id + '|' + f.join(''), url: s0 => urlFor(id, s0), urlFor, sub: !!(secDef && secDef.sub), type, relaxed, fallbackType: type };
+}
+
+function docPaging(doc, start, fallbackPer) {
+    const own = el => !el.closest('li.row, tr');
+    const bars = [...doc.querySelectorAll('.pagination')].filter(own);
+    const starts = [];
+    bars.forEach(bar => bar.querySelectorAll('a[href*="start="]').forEach(a => {
+        const m = (a.getAttribute('href') || '').match(/[?&]start=(\d+)/);
+        if (m) starts.push(+m[1]);
+    }));
+    const txt = bars.map(b => b.textContent).join(' ');
+    const tm = txt.match(/(?:pagina|page)\s*(\d+)\s*(?:di|of)\s*(\d+)/i);
+    const act = [...doc.querySelectorAll('.pagination li.active, .pagination .active')].find(own);
+    const current = (act ? (parseInt(act.textContent, 10) || 0) : 0) || (tm ? parseInt(tm[1], 10) : 0);
+    const pos = starts.filter(s => s > 0);
+    let per = 0;
+    if (current > 1 && start > 0) per = Math.round(start / (current - 1));
+    else if (start === 0 && pos.length) per = Math.min(...pos);
+    if (per < 5 || per > 200) per = fallbackPer || PAGE_SIZE;
+    let total = tm ? parseInt(tm[2], 10) : 0;
+    if (!total) total = Math.round(Math.max(0, start, ...starts) / per) + 1;
+    return { total: Math.max(1, total), per, current };
+}
+
+async function pgFetchOne(src, page, urlFn) {
+    const per = PG.per || PAGE_SIZE;
+    const start = (page - 1) * per;
+    await netGate();
+    const resp = await fetch((urlFn || src.url)(start), { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const doc = new DOMParser().parseFromString(await resp.text(), 'text/html');
+    const items = await parseTopicsFromDoc(doc, src.type, src.relaxed, src.fallbackType);
+    const msg = (doc.querySelector('#message') || {}).textContent || '';
+    const flood = items.length === 0 && /presto|soon|flood/i.test(msg);
+    if (src.kind === 'forum' && !flood && !doc.querySelector('ul.topiclist, .topiclist, .forumbg, a.topictitle')) throw new Error('risposta non valida dal forum');
+    const pg = docPaging(doc, start, per);
+    const info = [...doc.querySelectorAll('.searchresults-title, .action-bar .pagination, .pagination')].map(e => e.textContent).join(' ');
+    const tm = info.match(/(\d[\d.,]*)\s*(?:risultat|corrispondenz|match|result)/i);
+    const results = tm ? parseInt(tm[1].replace(/[.,]/g, ''), 10) || 0 : 0;
+    return { items, flood, total: pg.total, per: pg.per, current: pg.current, results, t: Date.now(), doc };
+}
+
+const subCache = new Map();
+const subTotals = new Map();
+const SUB_EXCLUDE_RE = /\b(richiest|regolament|segnalaz|comunicat|annunc|cestin)/i;
+
+async function pgFetchHome(src, page) {
+    const rs = await Promise.all(src.parts.map(async part => {
+        try { return await pgFetch(part, page); }
+        catch (e) { return { error: (e && e.message) || 'errore di rete' }; }
+    }));
+    const ok = rs.filter(r => !r.error);
+    if (!ok.length) throw new Error(rs[0].error);
+    const live = ok.filter(r => !r.flood);
+    if (!live.length) return ok[0];
+    const clamped = r => r.total < page || (r.current > 0 && r.current < page);
+    const use = live.filter(r => !clamped(r));
+    const total = Math.max(...live.map(r => r.total));
+    return { items: uniqById(use.flatMap(r => r.items)), flood: false, total, per: live[0].per, current: Math.min(page, total), results: 0, t: Date.now() };
+}
+
+async function pgFetch(src, page) {
+    if (src.kind === 'home') return pgFetchHome(src, page);
+    const first = await pgFetchOne(src, page);
+    const firstDoc = first.doc;
+    delete first.doc;
+    if (src.kind !== 'forum' || first.flood || !src.urlFor) return first;
+
+    const sid = String(src.id);
+    let subs = subCache.get(sid);
+    if (!subs) {
+        subs = firstDoc ? findSubforumIds(firstDoc, sid, SUB_EXCLUDE_RE) : [];
+        if (!subs.length && page > 1) {
+            try { const p1 = await pgFetchOne(src, 1); subs = findSubforumIds(p1.doc, sid, SUB_EXCLUDE_RE); } catch (e) {}
+        }
+        subCache.set(sid, subs);
+        const secName = forumToSection.get(sid);
+        if (secName) subs.forEach(id => { if (!forumToSection.has(id)) forumToSection.set(id, secName); });
+    }
+    if (!subs.length || !(src.sub || first.items.length === 0)) return first;
+
+    const jobs = subs.filter(id => (subTotals.get(id) || Infinity) >= page).map(async id => {
+        try {
+            const r = await pgFetchOne(src, page, s0 => src.urlFor(id, s0));
+            delete r.doc;
+            subTotals.set(id, r.total);
+            return r;
+        } catch (e) { return null; }
+    });
+    const rs = (await Promise.all(jobs)).filter(Boolean);
+    if (rs.some(r => r.flood)) return { ...first, flood: true };
+
+    const clamped = r => r.total < page || (r.current > 0 && r.current < page);
+    const parts = [first, ...rs].filter(r => !clamped(r));
+    const total = Math.max(first.total, ...rs.map(r => r.total));
+    return {
+        items: uniqById(parts.flatMap(r => r.items)), flood: false,
+        total, per: first.per, current: Math.min(page, total), results: 0, t: Date.now()
+    };
+}
+
+async function loadPage(page, opts = {}) {
+    const src = pgSource();
+    if (!src) { renderDeck(localFilterValue(), true); return; }
+    const my = ++pgToken;
+    page = Math.max(1, parseInt(page, 10) || 1);
+    if (PG.key !== src.key) { PG.total = 0; PG.items = []; }
+    PG.key = src.key;
+    PG.per = perByKey.get(src.key) || PAGE_SIZE;
+    PG.page = page;
+    PG.err = '';
+
+    const ck = src.key + '#' + page;
+    let res = opts.force ? null : pageCache.get(ck);
+    if (res && Date.now() - res.t > PG_TTL) res = null;
+
+    if (!res) {
+        PG.loading = true;
+        if (rel) rel.loading = true;
+        cancelQueued();
+        updateChrome();
+        showSkeleton();
+        try { res = await pgFetch(src, page); }
+        catch (e) { res = { error: (e && e.message) || 'errore di rete' }; }
+        if (my !== pgToken) return;
+        PG.loading = false;
+        if (rel) rel.loading = false;
+        if (res.error || res.flood) {
+            PG.err = res.error || 'flood';
+            renderPager();
+            const txt = res.flood
+                ? '⏳ Il forum limita la frequenza delle richieste: attendi qualche secondo e riprova.'
+                : `⚠️ Impossibile caricare la pagina (${esc(res.error)}).`;
+            showListMessage(`${txt}<br><br><button class="seer-load-btn" data-pg-retry="1">🔄 Riprova</button>`, res.flood ? 'warn' : 'err');
+            return;
+        }
+        pageCache.set(ck, res);
+        if (pageCache.size > 80) pageCache.delete(pageCache.keys().next().value);
+    }
+    if (my !== pgToken) return;
+
+    PG.loading = false;
+    PG.total = res.total || 1;
+    PG.per = res.per || PG.per;
+    perByKey.set(src.key, PG.per);
+    PG.page = Math.min(res.current > 0 ? res.current : page, PG.total);
+    PG.items = res.items;
+    if (rel && view.key === 'releaser' && !search.active) {
+        if (rel.sq) { rel.sq.items = res.items; rel.sq.loading = false; rel.sq.exhausted = true; }
+        else rel.items = res.items;
+        rel.total = res.results || 0;
+        rel.exhausted = true;
+        rel.loading = false;
+    }
+    if (!search.active) PG.lastViewPage = PG.page;
+
+    renderDeck(localFilterValue(), true);
+    $('mirseer-app').scrollTop = 0;
+
+    if (pgOpenAfterLoad) {
+        const pick = pgOpenAfterLoad === 'first' ? lastDisplayed[0] : lastDisplayed[lastDisplayed.length - 1];
+        pgOpenAfterLoad = '';
+        if (pick) { kbId = String(pick.id); kbApply(true); openDetailModal(pick); }
+    }
+}
+
+function goPage(n) {
+    if (!isPagedView() || PG.loading) return;
+    n = Math.max(1, Math.min(PG.total || 1, parseInt(n, 10) || 1));
+    if (n === PG.page && !PG.err) return;
+    loadPage(n);
+}
+
+function pgOnSortChange() {
+    if (!isPagedView()) return;
+    const src = pgSource();
+    if (src && (src.kind === 'forum' || src.kind === 'home') && src.key !== PG.key) loadPage(1);
+}
+
+function pgWindow(cur, total) {
+    const span = IS_COARSE ? 1 : 2;
+    const set = new Set();
+    const add = n => { if (n >= 1 && n <= total) set.add(n); };
+    add(1); if (!IS_COARSE) add(2);
+    for (let i = cur - span; i <= cur + span; i++) add(i);
+    if (!IS_COARSE) add(total - 1);
+    add(total);
+    const nums = [...set].sort((a, b) => a - b);
+    const out = [];
+    nums.forEach((n, i) => {
+        if (i) {
+            const gap = n - nums[i - 1];
+            if (gap === 2) out.push(nums[i - 1] + 1);
+            else if (gap > 2) out.push('…');
+        }
+        out.push(n);
+    });
+    return out;
+}
+
+function renderPager() {
+    const boxes = [$('seer-pager-top'), $('seer-pager')];
+    let html = '';
+    if (isPagedView() && PG.total > 1) {
+        const c = PG.page, t = PG.total, busy = PG.loading;
+        const nums = pgWindow(c, t).map(n => n === '…'
+            ? '<span class="seer-pg-dots">…</span>'
+            : `<button class="seer-pg-btn ${n === c ? 'active' : ''}" data-pg="${n}"${busy ? ' disabled' : ''}>${n}</button>`).join('');
+        const nav = (v, label, off, title) => `<button class="seer-pg-btn" data-pg="${v}" title="${title}"${(off || busy) ? ' disabled' : ''}>${label}</button>`;
+        html = nav('first', '«', c <= 1, 'Prima pagina') + nav('prev', '‹', c <= 1, 'Pagina precedente  ( , )') +
+            nums +
+            nav('next', '›', c >= t, 'Pagina successiva  ( . )') + nav('last', '»', c >= t, 'Ultima pagina') +
+            `<span class="seer-pg-info">Pagina ${c} di ${t}</span>` +
+            `<input type="number" class="seer-adv-input seer-pg-jump" min="1" max="${t}" placeholder="Vai a…">` +
+            `<button class="seer-pg-btn" data-pg="go"${busy ? ' disabled' : ''}>Vai</button>`;
+    }
+    boxes.forEach(b => { if (b) b.innerHTML = html; });
+}
+
+function setupPaging() {
+    const onClick = e => {
+        const b = e.target.closest('[data-pg]');
+        if (!b || b.disabled) return;
+        const v = b.dataset.pg;
+        if (v === 'first') goPage(1);
+        else if (v === 'prev') goPage(PG.page - 1);
+        else if (v === 'next') goPage(PG.page + 1);
+        else if (v === 'last') goPage(PG.total);
+        else if (v === 'go') {
+            const inp = b.parentElement.querySelector('.seer-pg-jump');
+            if (inp && inp.value) goPage(inp.value);
+        } else goPage(v);
+    };
+    ['seer-pager-top', 'seer-pager'].forEach(id => {
+        const box = $(id);
+        if (!box) return;
+        box.addEventListener('click', onClick);
+        box.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('seer-pg-jump') && e.target.value) goPage(e.target.value);
+        });
+    });
+    const list = $('seer-main-list');
+    if (list) list.addEventListener('click', e => { if (e.target.closest('[data-pg-retry]')) loadPage(PG.page, { force: true }); });
+
+    document.addEventListener('keydown', e => {
+        const app = $('mirseer-app');
+        if (!app || app.style.display !== 'block' || e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target;
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test((t && t.tagName) || '') || (t && t.isContentEditable)) return;
+        if (['seer-modal-overlay', 'seer-settings-overlay', 'seer-trailer-overlay'].some(id => $(id) && $(id).style.display === 'flex')) return;
+        if (e.key === ',') goPage(PG.page - 1);
+        else if (e.key === '.') goPage(PG.page + 1);
+    });
+}
+
+GM_addStyle(`
+.seer-pager { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 16px; }
+.seer-pager:empty { display: none; }
+#seer-pager { margin: 22px 0 30px; }
+.seer-pg-btn {
+    min-width: 38px; height: 36px; padding: 0 11px; border-radius: 9px; font-family: inherit; font-size: 13px; font-weight: 800;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--seer-border); color: #cbd5e1; cursor: pointer; transition: all 0.2s;
+}
+.seer-pg-btn:hover:not(:disabled) { border-color: var(--seer-accent); color: #fff; }
+.seer-pg-btn.active { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff; box-shadow: 0 4px 12px var(--seer-accent-glow); }
+.seer-pg-btn:disabled { opacity: 0.4; cursor: default; }
+.seer-pg-dots { color: var(--seer-text-muted); padding: 0 3px; font-weight: 800; }
+.seer-pg-info { font-size: 12.5px; font-weight: 700; color: var(--seer-text-muted); margin: 0 6px; white-space: nowrap; }
+.seer-pg-jump { width: 92px; height: 36px; }
+#mirseer-app.seer-light .seer-pg-btn { background: rgba(15,23,42,.05); color: #334155; }
+#mirseer-app.seer-light .seer-pg-btn:hover:not(:disabled) { color: #0f172a; }
+#mirseer-app.seer-light .seer-pg-btn.active { color: #fff; }
+@media (max-width: 560px) { .seer-pg-info { width: 100%; text-align: center; order: -1; } }
+`);
+
 GM_addStyle(`
 .seer-row { content-visibility: auto; contain-intrinsic-size: auto 90px; }
 .seer-row.is-card { contain-intrinsic-size: auto 340px; }
@@ -5377,7 +5747,6 @@ GM_addStyle(`
 #mirseer-app.seer-compact .seer-row.is-card { contain-intrinsic-size: auto 280px; }
 `);
 
-// Barra di ricerca nella pagina del releaser
 GM_addStyle(`
 .seer-rel-search { display: none; margin: -8px 0 16px; }
 .seer-rel-search.show { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -5385,7 +5754,6 @@ GM_addStyle(`
 .seer-rel-search-hint { font-size: 12.5px; font-weight: 600; color: var(--seer-text-muted); }
 `);
 
-// Piccoli stili aggiuntivi (select del pannello avanzato, contatori nelle pillole releaser)
 GM_addStyle(`
 .seer-adv select.seer-adv-input { width: auto; cursor: pointer; }
 .seer-adv select.seer-adv-input option { background: #0e1424; color: #f8fafc; }
@@ -5394,26 +5762,19 @@ GM_addStyle(`
 .seer-meta-pill { border: 1px solid var(--seer-border); }
 `);
 
-// =====================================================================
-//  INIT
-// =====================================================================
 GM_addStyle(`
-/* MIRSEER-MOBILE-PATCH */
 html.seer-lock, body.seer-lock { overflow: hidden !important; }
 #mirseer-app, .seer-modal-scroll, .seer-settings-window, .seer-sidebar,
 .seer-magnet-list, .seer-text-box, .seer-mediainfo pre { overscroll-behavior: contain; }
 
-/* Safe areas (notch / gesture bar) */
 #mirseer-fab { bottom: calc(24px + env(safe-area-inset-bottom, 0px)) !important; right: calc(24px + env(safe-area-inset-right, 0px)) !important; }
 #seer-toasts { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
 #seer-batch-bar { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
 body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 .seer-modal-foot { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 
-/* Sidebar backdrop */
 #seer-side-backdrop { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: var(--seer-nav-h); background: rgba(0,0,0,.55); z-index: 190; }
 
-/* Dynamic viewport units (address bar aware) */
 @supports (height: 100dvh) {
     .seer-sidebar { max-height: calc(100dvh - var(--seer-nav-h)); }
     .seer-detail-window.is-portrait, .seer-detail-window:not(.is-landscape) { max-height: 92dvh; }
@@ -5430,7 +5791,6 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     .seer-hero-desc { -webkit-line-clamp: 3; font-size: 14px; }
 }
 
-/* Two-row nav bar on phones */
 @media (max-width: 760px) {
     :root { --seer-nav-h: calc(104px + env(safe-area-inset-top, 0px)); }
     .seer-nav { flex-wrap: wrap; align-content: center; gap: 8px; padding: env(safe-area-inset-top, 0px) 12px 0; }
@@ -5445,7 +5805,6 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
 }
 
 @media (max-width: 820px) {
-    /* Detail modal = full-screen sheet */
     #seer-modal-overlay { padding: 0; }
     .seer-detail-window, .seer-detail-window.is-landscape, .seer-detail-window.is-portrait {
         max-width: none !important; width: 100% !important; height: 100vh !important; max-height: 100vh !important;
@@ -5458,12 +5817,10 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     .seer-magnet-box .seer-magnet-list { max-height: 96px; }
     .seer-ext-menu { left: 0; right: auto; max-width: calc(100vw - 32px); }
 
-    /* Settings = full-screen */
     #seer-settings-overlay { padding: 0; }
     .seer-settings-window { max-width: none; height: 100vh; max-height: 100vh; border-radius: 0; }
     .seer-settings-select { width: 100%; min-width: 0; }
 
-    /* Filters: single horizontally scrollable rows */
     .seer-facets, .seer-rl-head {
         flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
         margin-left: -14px; margin-right: -14px; padding: 0 14px 4px;
@@ -5471,13 +5828,11 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     .seer-facets::-webkit-scrollbar, .seer-rl-head::-webkit-scrollbar { display: none; }
     .seer-facets > *, .seer-rl-head > * { flex-shrink: 0; white-space: nowrap; }
 
-    /* Advanced filters stacked */
     .seer-adv.open { flex-direction: column; align-items: stretch; gap: 12px; }
     .seer-adv-item { width: 100%; justify-content: space-between; }
     .seer-adv input[type=range] { flex: 1; width: auto; min-width: 0; }
     .seer-adv-input, .seer-adv-input.wide, .seer-adv select.seer-adv-input { flex: 1; width: auto; min-width: 0; }
 
-    /* Batch bar: one scrollable row */
     #seer-batch-bar {
         left: 8px; right: 8px; transform: none; max-width: none; flex-wrap: nowrap; overflow-x: auto;
         justify-content: flex-start; scrollbar-width: none;
@@ -5495,7 +5850,6 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     .seer-list.seer-grid { grid-template-columns: repeat(auto-fill, minmax(min(150px, 44vw), 1fr)); }
 }
 
-/* Touch devices */
 @media (pointer: coarse) {
     #mirseer-app * { -webkit-tap-highlight-color: transparent; }
     #mirseer-app button, #mirseer-app a, #mirseer-app .seer-row, #mirseer-app select { touch-action: manipulation; }
@@ -5505,7 +5859,6 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     .seer-side-item { min-height: 44px; }
     .seer-row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 
-    /* Cheaper rendering on mobile GPUs */
     .seer-nav, #seer-modal-overlay, #seer-settings-overlay, .seer-hero-arrow, .seer-modal-close,
     .seer-modal-nav, .seer-is-card .seer-fav-btn, .is-card .seer-fav-btn {
         backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
@@ -5514,7 +5867,6 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
     #mirseer-app.seer-light .seer-hero-bg.blur { filter: blur(12px) brightness(1.08) saturate(1.1); transform: scale(1.15); }
 }
 
-/* No sticky hover effects on touch */
 @media (hover: none) {
     #mirseer-app .seer-row:hover, #mirseer-app .seer-row.is-card:hover { transform: none; box-shadow: none; }
     #mirseer-app .seer-rl-card:hover, #mirseer-app .seer-fav-btn:hover, #mirseer-app .seer-modal-close:hover { transform: none; }
@@ -5523,18 +5875,15 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
 }
 `);
 
-// ===== MIRSEER-MOBILE-PATCH: comportamenti mobile =====
 function mobileEnhance() {
     const app = $('mirseer-app');
     if (!app) return;
 
-    // viewport-fit=cover, needed for env(safe-area-inset-*) to work
     try {
         const mv = document.querySelector('meta[name="viewport"]');
         if (mv && !/viewport-fit/i.test(mv.content)) mv.content += ', viewport-fit=cover';
     } catch (e) {}
 
-    // Lock the forum page while MirSeer is open
     const lockPage = () => {
         const open = app.style.display === 'block';
         document.documentElement.classList.toggle('seer-lock', open);
@@ -5543,7 +5892,6 @@ function mobileEnhance() {
     new MutationObserver(lockPage).observe(app, { attributes: true, attributeFilter: ['style'] });
     lockPage();
 
-    // Sidebar backdrop (tap outside closes the drawer)
     const sb = $('seer-sidebar');
     const bd = document.createElement('div');
     bd.id = 'seer-side-backdrop';
@@ -5555,7 +5903,6 @@ function mobileEnhance() {
     const mobile = IS_COARSE || window.matchMedia('(max-width: 980px)').matches;
     if (!mobile) return;
 
-    // Android back button closes trailer / settings / modal / drawer instead of leaving the page
     const layers = [
         { el: $('seer-trailer-overlay'), isOpen: () => $('seer-trailer-overlay').style.display === 'flex', close: () => closeTrailer(), attr: 'style' },
         { el: $('seer-settings-overlay'), isOpen: () => $('seer-settings-overlay').style.display === 'flex', close: () => $('seer-settings-close').click(), attr: 'style' },
@@ -5585,7 +5932,6 @@ function mobileEnhance() {
         if (top) { top.pushed = false; top.close(); }
     });
 
-    // Long-press a row = enter selection mode and select it
     const list = $('seer-main-list');
     let lpT = null, lpX = 0, lpY = 0, lpFired = 0;
     list.addEventListener('touchstart', e => {
@@ -5615,7 +5961,6 @@ function mobileEnhance() {
     }, true);
     list.addEventListener('contextmenu', e => { if (e.target.closest('.seer-row')) e.preventDefault(); });
 
-    // Swipe on the hero carousel
     const hero = $('seer-hero');
     let hx = 0, hy = 0;
     hero.addEventListener('touchstart', e => { const t = e.changedTouches[0]; hx = t.clientX; hy = t.clientY; }, { passive: true });
@@ -5627,7 +5972,6 @@ function mobileEnhance() {
         }
     }, { passive: true });
 
-    // One-time hint about swiping between releases in the detail sheet
     new MutationObserver(() => {
         if ($('seer-modal-overlay').style.display !== 'flex') return;
         if (getPref('swipeHint', false)) return;
@@ -5635,6 +5979,1375 @@ function mobileEnhance() {
         toast('👆 Scorri a sinistra/destra per cambiare release', '', 3600);
     }).observe($('seer-modal-overlay'), { attributes: true, attributeFilter: ['style'] });
 }
+
+GM_addStyle(`
+.seer-proj-head { display: none; margin: 0 0 18px; }
+.seer-proj-banner { position: relative; border-radius: 16px; overflow: hidden; min-height: 220px; display: flex; align-items: flex-end; border: 1px solid var(--seer-border); background: linear-gradient(135deg, #1e1b4b, #312e81); }
+.seer-proj-banner .seer-hero-bg { z-index: 0; }
+.seer-proj-banner .seer-hero-shade { z-index: 1; }
+.seer-proj-body { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 12px; padding: 22px 28px; width: 100%; }
+.seer-proj-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.seer-proj-title { font-size: 30px; line-height: 1.12; letter-spacing: -.5px; margin: 0; font-weight: 900; color: #fff; }
+.seer-proj-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.seer-proj-desc { margin: 14px 2px 0; font-size: 14px; line-height: 1.6; color: var(--seer-text-muted); }
+.seer-proj-notes, .seer-proj-forums { margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+@media (max-width: 720px) { .seer-proj-title { font-size: 22px; } .seer-proj-body { padding: 16px; } }
+`);
+
+let proj = null;
+const isProjectItem = it => !!it && it.type === PROJECT_SECTION;
+const projTitleOk = s => !!s && s.length >= 5 && !/viewtopic\.php|https?:\/\/|www\./i.test(s)
+    && !/^(?:qui|link|clicca qui|click here|download|vai|apri|scarica|leggi|here|topic|thread)$/i.test(s);
+
+function projLinkText(a) {
+    let t = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!projTitleOk(t)) { const im = a.querySelector('img'); t = im ? String(im.getAttribute('alt') || im.getAttribute('title') || '').trim() : ''; }
+    if (!projTitleOk(t)) t = String(a.getAttribute('title') || '').trim();
+    return projTitleOk(t) ? t : '';
+}
+
+
+
+function projMakeItem(e, idx) {
+    let it = registry.get(e.key);
+    if (!it) {
+        const ok = !!e.text;
+        const raw = ok ? e.text : 'Topic #' + e.key.replace(/^p/, '');
+        const meta = pure.parseReleaseInfo(raw);
+        it = buildItem({ topicId: e.key, href: e.url, raw, type: meta.isTvSeries ? 'Serie TV' : 'Film', meta });
+        it._needsTitle = !ok;
+        it._fromProject = true;
+        registry.set(e.key, it);
+        hydrateSync(it);
+    }
+    it._pOrder = idx;
+    it._pGroup = e.group || '';
+    return it;
+}
+
+function projTypeFromCrumbs(item, doc) {
+    if (!item._fromProject || item._typeFixed) return;
+    const ids = [...doc.querySelectorAll('.breadcrumbs a[href*="viewforum.php"], #nav-breadcrumbs a[href*="viewforum.php"], ul.linklist a[href*="viewforum.php"]')]
+        .map(a => ((a.getAttribute('href') || '').match(/[?&]f=(\d+)/) || [])[1]).filter(Boolean).reverse();
+    for (const id of ids) {
+        const name = forumToSection.get(id);
+        if (name) { item.type = name; item.forumId = id; item._typeFixed = true; return; }
+    }
+}
+
+function projProbe(src, ms = 6000) {
+    return new Promise(res => {
+        const im = new Image();
+        let done = false;
+        const fin = v => { if (!done) { done = true; res(v); } };
+        im.onload = () => fin({ src, w: im.naturalWidth, h: im.naturalHeight });
+        im.onerror = () => fin(null);
+        setTimeout(() => fin(null), ms);
+        im.src = src;
+    });
+}
+
+
+function projRefresh(P) {
+    if (view.key !== 'project' || proj !== P) return;
+    renderProjHead();
+    renderDeck(localFilterValue(), true);
+}
+
+async function projResolveOne(P, it, run) {
+    try {
+        await netGate();
+        const { doc } = await fetchTopicPage(it.url);
+        if (P.run !== run) return;
+        const a = doc.querySelector('h2.topic-title a, .topic-title a, h2 a[href*="viewtopic.php"]');
+        const post = doc.querySelector('.post .content, .postbody .content, div.content');
+        let title = a ? a.textContent.replace(/\s+/g, ' ').trim() : '';
+        if (!title) title = String(doc.title || '').replace(/\s+[-\u2013|]\s+[^-\u2013|]*$/, '').trim();
+        const msg = ((doc.querySelector('#message') || {}).textContent || '');
+        if (!post || !title || /non\s+(?:sei|hai|puoi)|autorizzat|permess|accedi|login/i.test(msg)) throw new Error('inaccessibile');
+        const tid = a ? ((a.getAttribute('href') || '').match(/[?&]t=(\d+)/) || [])[1] : null;
+        if (String(it.id)[0] === 'p') {
+            if (!tid) throw new Error('topic non risolvibile');
+            const exist = registry.get(tid);
+            registry.delete(String(it.id));
+            if (exist && exist !== it) {
+                const pos = P.items.indexOf(it);
+                if (P.items.includes(exist)) P.items.splice(pos, 1); else P.items[pos] = exist;
+                exist._pOrder = it._pOrder;
+                P.dup++;
+                return;
+            }
+            it.id = tid; it.numericId = parseInt(tid, 10) || 0; it.url = SITE_ROOT + 'viewtopic.php?t=' + tid;
+            registry.set(tid, it);
+        }
+        if (it._needsTitle) {
+            const meta = pure.parseReleaseInfo(title);
+            it.rawTitle = title; it.cleanTitle = meta.cleanTitle; it.year = meta.year; it.meta = meta; it._hay = null;
+            it.displayTitle = (typeof composeDisplayTitle === 'function') ? composeDisplayTitle(it) : meta.displayTitle;
+            if (!it._typeFixed) it.type = meta.isTvSeries ? 'Serie TV' : 'Film';
+            it._needsTitle = false;
+        }
+        projTypeFromCrumbs(it, doc);
+    } catch (e) {
+        if (P.run !== run) return;
+        it.unavailable = true;
+        it.displayTitle = 'Contenuto non accessibile (topic #' + String(it.id).replace(/^p/, '') + ')';
+        it.synopsis = 'Questo contenuto non \u00e8 accessibile o non esiste pi\u00f9 (' + ((e && e.message) || 'errore') + '). Puoi provare ad aprire il link originale dal forum.';
+        it.kind = 'text'; it.posterTried = true;
+    }
+}
+
+async function projResolveMeta(P, run) {
+    const need = P.items.filter(it => it._needsTitle || String(it.id)[0] === 'p');
+    let i = 0;
+    const worker = async () => {
+        while (i < need.length) {
+            if (P.run !== run) return;
+            const it = need[i++];
+            await projResolveOne(P, it, run);
+            if (P.run === run && i % 4 === 0) projRefresh(P);
+        }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (P.run === run) projRefresh(P);
+}
+
+
+
+function closeProject() {
+    const p = proj && proj.prev;
+    const restore = () => {
+        if (!p || !p.scroll) return;
+        const app = $('mirseer-app');
+        const go = () => { if (app) app.scrollTo({ top: p.scroll, behavior: 'instant' }); };
+        requestAnimationFrame(go);
+        setTimeout(go, 400);
+    };
+    const nav = r => { Promise.resolve(r).then(restore); };
+    if (!p) { setView('home'); return; }
+    if (p.project) { proj = p.project; nav(setView('project')); return; }
+    if (p.key === 'section' && p.section) { PG.want = p.page || 1; nav(setView('section', p.section)); return; }
+    if (['home', 'films', 'series'].includes(p.key)) { PG.want = p.page || 1; nav(setView(p.key)); return; }
+    nav(setView(['favs', 'releasers'].includes(p.key) ? p.key : 'home'));
+}
+
+
+
+
+GM_addStyle(`
+.seer-pj-cover { position: relative; border-radius: 18px; overflow: hidden; min-height: 200px; max-height: 420px; display: flex; align-items: flex-end; border: 1px solid var(--seer-border); background: linear-gradient(135deg, #1e1b4b, #312e81); }
+.seer-pj-cover .bgblur { position: absolute; inset: -24px; width: calc(100% + 48px); height: calc(100% + 48px); object-fit: cover; filter: blur(26px) saturate(1.2); opacity: .55; }
+.seer-pj-cover .banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.seer-pj-cover .banner.contain { object-fit: contain; }
+.seer-pj-cover .shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,9,14,.10) 0%, rgba(7,9,14,.30) 45%, rgba(7,9,14,.92) 100%); }
+.seer-pj-cover .body { position: relative; z-index: 2; width: 100%; display: flex; flex-direction: column; gap: 10px; padding: 18px 26px; }
+.seer-pj-cover h1 { margin: 0; font-size: 30px; line-height: 1.12; letter-spacing: -.5px; font-weight: 900; color: #fff; text-shadow: 0 2px 14px rgba(0,0,0,.6); }
+.seer-pj-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 0; }
+.seer-pj-desc { margin: 12px 2px 0; font-size: 14px; line-height: 1.6; color: var(--seer-text-muted); }
+.seer-pj-desc.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.seer-pj-row { margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+@media (max-width: 720px) { .seer-pj-cover h1 { font-size: 22px; } .seer-pj-cover .body { padding: 14px 16px; } }
+
+.seer-ac-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; align-items: center; }
+.seer-ac-card { background: var(--seer-card); border: 1px solid var(--seer-border); border-radius: 14px; padding: 18px 20px; min-width: 0; }
+.seer-ac-card h3 { margin: 0 0 10px; font-size: 15px; font-weight: 800; }
+.seer-ac-hero { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.seer-ac-hero img, .seer-ac-av { width: 92px; height: 92px; border-radius: 50%; object-fit: cover; border: 2px solid var(--seer-border-hover); background: rgba(255,255,255,.05); display: flex; align-items: center; justify-content: center; font-size: 40px; }
+.seer-ac-name { font-size: 24px; font-weight: 900; letter-spacing: -.3px; }
+.seer-ac-sub { color: var(--seer-text-muted); font-size: 13px; margin-top: 3px; }
+.seer-ac-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+.seer-ac-row { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid var(--seer-border); font-size: 13px; }
+.seer-ac-row:last-child { border-bottom: 0; }
+.seer-ac-row b { color: var(--seer-text-muted); font-weight: 600; flex-shrink: 0; }
+.seer-ac-row span { text-align: right; word-break: break-word; min-width: 0; }
+.seer-ac-split { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.seer-ac-nav { display: flex; flex-direction: column; gap: 5px; position: sticky; top: calc(var(--seer-nav-h) + 12px); }
+.seer-ac-nav .seer-facet { text-align: left; }
+.seer-ac-navh { font-size: 11px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: var(--seer-text-muted); margin: 10px 2px 2px; }
+.seer-ac-note { font-size: 12.5px; color: var(--seer-text-muted); line-height: 1.5; margin: 0 0 12px; }
+.seer-ac-msg { display: inline-block; font-size: 13px; font-weight: 700; padding: 7px 12px; border-radius: 9px; background: rgba(255,255,255,.06); }
+.seer-ac-msg.ok { background: rgba(16,185,129,.18); color: #34d399; }
+.seer-ac-msg.warn { background: rgba(245,158,11,.18); color: #fbbf24; }
+.seer-ac-msg.err { background: rgba(244,63,94,.18); color: #fb7185; }
+.seer-ac-list { display: flex; flex-direction: column; gap: 6px; }
+.seer-ac-list button { text-align: left; background: rgba(255,255,255,.04); border: 1px solid var(--seer-border); color: var(--seer-text); padding: 9px 12px; border-radius: 9px; cursor: pointer; font-size: 13px; }
+.seer-ac-list button:hover { border-color: var(--seer-border-hover); background: rgba(99,102,241,.12); }
+.seer-uf dl { display: grid; grid-template-columns: minmax(150px, 34%) minmax(0, 1fr); gap: 6px 16px; margin: 0; padding: 11px 0; border-bottom: 1px solid var(--seer-border); }
+.seer-uf dt, .seer-uf dd { margin: 0; font-size: 13px; }
+.seer-uf dt label { font-weight: 700; }
+.seer-uf dt span { display: block; font-size: 11.5px; color: var(--seer-text-muted); font-weight: 400; margin-top: 2px; }
+.seer-uf fieldset { border: 0; padding: 0; margin: 0 0 8px; }
+.seer-uf legend { font-weight: 800; font-size: 14px; padding: 0; margin: 8px 0 2px; }
+.seer-uf h3 { font-size: 14px; margin: 10px 0 2px; }
+.seer-uf input[type=text], .seer-uf input[type=number], .seer-uf input[type=email], .seer-uf input[type=url], .seer-uf input[type=date], .seer-uf input[type=tel], .seer-uf input:not([type]), .seer-uf select, .seer-uf textarea { width: 100%; max-width: 520px; background: rgba(255,255,255,.05); color: var(--seer-text); border: 1px solid var(--seer-border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; }
+.seer-uf textarea { min-height: 120px; resize: vertical; }
+.seer-uf select option, .seer-uf select optgroup { color: #0f172a; }
+.seer-uf label { cursor: pointer; }
+.seer-uf input[type=radio], .seer-uf input[type=checkbox] { margin-right: 5px; accent-color: var(--seer-accent); }
+.seer-uf input:disabled, .seer-uf select:disabled, .seer-uf textarea:disabled { opacity: .6; cursor: not-allowed; }
+.seer-uf .error, .seer-uf p.error { color: #fb7185; }
+.seer-uf-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+@media (max-width: 820px) { .seer-ac-split { grid-template-columns: 1fr; } .seer-ac-nav { position: static; flex-direction: row; flex-wrap: wrap; } .seer-uf dl { grid-template-columns: 1fr; } }
+
+.seer-st-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.seer-st-num { font-size: 28px; font-weight: 900; letter-spacing: -.5px; background: linear-gradient(135deg, #818cf8, #c084fc, #f472b6); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.seer-st-lbl { font-size: 12.5px; color: var(--seer-text-muted); margin-top: 2px; }
+.seer-st-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.seer-pie-wrap { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
+.seer-pie { position: relative; width: 180px; height: 180px; border-radius: 50%; flex-shrink: 0; }
+.seer-pie::after { content: ''; position: absolute; inset: 27%; border-radius: 50%; background: var(--seer-card); }
+.seer-pie-c { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-weight: 900; font-size: 22px; line-height: 1.1; }
+.seer-pie-c small { font-size: 11px; font-weight: 600; color: var(--seer-text-muted); max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seer-leg { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 190px; }
+.seer-leg button, .seer-leg div { display: flex; align-items: center; gap: 8px; font-size: 13px; background: none; border: 0; color: var(--seer-text); padding: 2px 0; text-align: left; }
+.seer-leg button { cursor: pointer; }
+.seer-leg button:hover b { text-decoration: underline; }
+.seer-leg i { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+.seer-leg b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.seer-leg em { font-style: normal; color: var(--seer-text-muted); font-size: 12px; white-space: nowrap; }
+.seer-bar { height: 9px; border-radius: 6px; background: rgba(127,127,127,.2); overflow: hidden; }
+.seer-bar > i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, #6366f1, #a855f7); }
+.seer-qrow { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }
+.seer-qrow em { font-style: normal; color: var(--seer-text-muted); font-size: 12px; white-space: nowrap; }
+.seer-months { display: flex; gap: 10px; align-items: flex-end; height: 130px; margin-top: 8px; }
+.seer-months > div { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; font-size: 11px; color: var(--seer-text-muted); }
+.seer-months > div > i { display: block; width: 100%; max-width: 46px; border-radius: 6px 6px 2px 2px; background: linear-gradient(180deg, #a855f7, #6366f1); min-height: 3px; }
+`);
+
+const PJ_BLOCK = /^(DIV|P|LI|UL|OL|TR|TABLE|TBODY|THEAD|H[1-6]|DL|DT|DD|BLOCKQUOTE|PRE|HR|CENTER|FIELDSET|SECTION|ARTICLE)$/;
+const PJ_GENERIC = /^(?:qui|link|clicca qui|click here|download|vai|apri|scarica|leggi|here|topic|thread|vai al topic|vai alla scheda|scheda|clicca|guarda|url|collegamento|streaming|link topic|topic originale)$/i;
+
+function pjCleanTitle(s) {
+    s = String(s || '').replace(/\u00a0/g, ' ').replace(/https?:\/\/\S+/gi, ' ')
+        .replace(/\[\s*(?:link|qui|download|topic|url)\s*\]/gi, ' ').replace(/\s+/g, ' ').trim();
+    s = s.replace(/^[\s\u2022\u00b7\u25aa\u25a0\u25ba\u25b6\u00bb>*\u2013\u2014\-|:]+/, '').replace(/^\(?\d{1,3}[.)\]]\s+/, '');
+    s = s.replace(/(?:\s*[-\u2013\u2014:|]+\s*)?(?:link|qui|clicca\s+qui|click\s+here|download|scarica|vai\s+al\s+topic|apri|topic|thread)\s*:?\s*$/i, '');
+    s = s.replace(/[\s\-\u2013\u2014:|\u2022\u00b7\u00bb>\u25ba\u25b6\u279c\u27a4\u2192]+$/, '').trim();
+    return s.slice(0, 220);
+}
+const pjGood = s => !!s && s.length >= 2 && /[A-Za-z0-9\u00c0-\u024f]/.test(s) && !PJ_GENERIC.test(s);
+
+function pjTokens(root, skipQuotes) {
+    const toks = [];
+    const walk = (n, bold) => {
+        if (n.nodeType === 3) { const t = n.nodeValue.replace(/\s+/g, ' '); if (t) toks.push({ k: 't', s: t, b: bold }); return; }
+        if (n.nodeType !== 1) return;
+        const tag = n.tagName;
+        if (tag === 'BR') { toks.push({ k: 'n' }); return; }
+        if (/^(SCRIPT|STYLE|NOSCRIPT|IMG)$/.test(tag)) return;
+        if (n.matches && n.matches('.signature, .sig, .smilies')) return;
+        if (skipQuotes && tag === 'BLOCKQUOTE') return;
+        if (tag === 'A') { toks.push({ k: 'a', el: n, s: (n.textContent || '').replace(/\s+/g, ' ').trim() }); return; }
+        const st = (n.getAttribute && n.getAttribute('style')) || '';
+        const b = bold || /^(B|STRONG|H[1-6]|TH)$/.test(tag) || /font-weight\s*:\s*(bold|[6-9]00)/i.test(st) || /font-size\s*:\s*(1[3-9]\d|[2-9]\d\d)%/i.test(st);
+        const blk = PJ_BLOCK.test(tag);
+        if (blk) toks.push({ k: 'n' });
+        if (tag === 'TD' || tag === 'TH') toks.push({ k: 't', s: ' | ', b: false });
+        for (const c of n.childNodes) walk(c, b);
+        if (blk) toks.push({ k: 'n' });
+    };
+    walk(root, false);
+    return toks;
+}
+
+function pjLines(toks) {
+    const raw = []; let cur = [];
+    for (const t of toks) { if (t.k === 'n') { if (cur.length) raw.push(cur); cur = []; } else cur.push(t); }
+    if (cur.length) raw.push(cur);
+    return raw.map(l => {
+        const txt = l.filter(t => t.k === 't');
+        const real = txt.filter(t => t.s.trim());
+        return { toks: l, text: txt.map(t => t.s).join(' ').replace(/\s+/g, ' ').trim(), bold: real.length > 0 && real.every(t => t.b), links: l.filter(t => t.k === 'a') };
+    });
+}
+
+function pjTopicRef(a) {
+    const href = a.getAttribute('href') || '';
+    if (!/viewtopic\.php|viewforum\.php/i.test(href)) return null;
+    let u;
+    try { u = new URL(fixUrl(new URL(href, SITE_ROOT).href)); } catch (e) { return { bad: true }; }
+    if (u.hostname.replace(/^www\./, '') !== location.hostname.replace(/^www\./, '')) return null;
+    if (/viewforum\.php/i.test(u.pathname)) { const f = u.searchParams.get('f'); return /^\d+$/.test(f || '') ? { forum: f } : { bad: true }; }
+    const t = u.searchParams.get('t'), p = u.searchParams.get('p');
+    if (/^\d+$/.test(t || '')) return { key: t, url: SITE_ROOT + 'viewtopic.php?t=' + t };
+    if (/^\d+$/.test(p || '')) return { key: 'p' + p, url: u.href };
+    return { bad: true };
+}
+
+
+function pjParse(posts, selfId) {
+    const out = { entries: [], forums: [], ext: [], dup: 0, bad: 0, info: '', hasMagnet: false };
+    const byKey = new Map(), seenF = new Set(), seenE = new Set(), info = [];
+    let group = '';
+    posts.forEach((post, pi) => {
+        const lines = pjLines(pjTokens(post.el, pi > 0));
+        let pending = null;
+        lines.forEach(ln => {
+            const refs = ln.links.map(a => ({ a, ref: pjTopicRef(a.el) }));
+            refs.forEach(r => {
+                const h = r.a.el.getAttribute('href') || '';
+                if (!r.ref) {
+                    if (/^magnet:/i.test(h)) { out.hasMagnet = true; return; }
+                    if (/^https?:\/\//i.test(h) && !/\.(?:jpe?g|png|gif|webp)(?:\?|$)/i.test(h) && !BAD_LINK_RE.test(h) && out.ext.length < 24 && !seenE.has(h)) {
+                        let host = ''; try { host = new URL(h).hostname.replace(/^www\./, ''); } catch (e) {}
+                        if (host && host !== location.hostname.replace(/^www\./, '')) { seenE.add(h); out.ext.push({ url: h, text: (pjGood(pjCleanTitle(r.a.s)) ? pjCleanTitle(r.a.s) : '') || host }); }
+                    }
+                    return;
+                }
+                if (r.ref.bad) { out.bad++; return; }
+                if (r.ref.forum && !seenF.has(r.ref.forum)) { seenF.add(r.ref.forum); out.forums.push({ id: r.ref.forum, name: pjGood(pjCleanTitle(r.a.s)) ? pjCleanTitle(r.a.s) : '' }); }
+            });
+            const topicLinks = refs.filter(r => r.ref && r.ref.key);
+            if (!topicLinks.length) {
+                if (!ln.links.length) {
+                    const tx = pjCleanTitle(ln.text);
+                    if (tx && tx.length <= 90) pending = { text: tx, bold: ln.bold, colon: /:\s*$/.test(ln.text), used: false };
+                    if (pi === 0 && tx.length >= 25 && !/^(?:scheda|dati|risoluzione|formato|lingua|audio|video|codec|mediainfo|screenshot)/i.test(tx)) info.push(tx);
+                } else pending = null;
+                return;
+            }
+            const toks = ln.toks;
+            const titled = topicLinks.map(r => {
+                const at = toks.indexOf(r.a);
+                let title = pjCleanTitle(r.a.s);
+                if (!pjGood(title)) {
+                    title = '';
+                    const img = r.a.el.querySelector('img');
+                    if (img) title = pjCleanTitle(img.getAttribute('alt') || img.getAttribute('title') || '');
+                    if (!pjGood(title)) title = pjCleanTitle(r.a.el.getAttribute('title') || '');
+                    if (!pjGood(title)) {
+                        const pre = []; let j = at - 1;
+                        while (j >= 0 && toks[j].k !== 'a') { if (toks[j].k === 't') pre.unshift(toks[j].s); j--; }
+                        title = pjCleanTitle(pre.join(' '));
+                    }
+                    if (!pjGood(title)) {
+                        const post2 = []; let k = at + 1;
+                        while (k < toks.length && toks[k].k !== 'a') { if (toks[k].k === 't') post2.push(toks[k].s); k++; }
+                        title = pjCleanTitle(post2.join(' '));
+                    }
+                }
+                return { r, title: pjGood(title) ? title : '', fromPending: false };
+            });
+            titled.forEach(x => {
+                if (!x.title && pending && !pending.used) { x.title = pending.text; pending.used = true; x.fromPending = true; }
+            });
+            const own = titled.some(x => x.title && !x.fromPending);
+            if (pending && !pending.used && own && (pending.bold || pending.colon || (pending.text === pending.text.toUpperCase() && /[A-Z]/.test(pending.text)))) group = pending.text.replace(/[:\s]+$/, '');
+            pending = null;
+            titled.forEach(x => {
+                const ref = x.r.ref;
+                if (String(ref.key) === String(selfId)) return;
+                const ex = byKey.get(ref.key);
+                if (ex) { out.dup++; if (!ex.text && x.title) ex.text = x.title; return; }
+                const e = { key: ref.key, url: ref.url, text: x.title, group };
+                byKey.set(ref.key, e); out.entries.push(e);
+            });
+        });
+    });
+    out.info = info.slice(0, 6).join('\n').slice(0, 1200);
+    return out;
+}
+
+async function projFetchDoc(url, ms = 25000) {
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    const tm = ac ? setTimeout(() => ac.abort(), ms) : 0;
+    try {
+        const r = await fetch(url, ac ? { credentials: 'same-origin', signal: ac.signal } : { credentials: 'same-origin' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const html = await r.text();
+        return { doc: new DOMParser().parseFromString(html, 'text/html'), html };
+    } finally { clearTimeout(tm); }
+}
+
+function pjPostsOf(doc) {
+    let list = [...doc.querySelectorAll('div.post, article.post')];
+    list = list.filter(p => !list.some(o => o !== p && o.contains(p)));
+    if (!list.length) list = [...doc.querySelectorAll('.postbody')];
+    return list.map(p => {
+        const el = p.querySelector('.postbody .content, .content') || (p.classList.contains('postbody') ? p.querySelector('.content') : null);
+        const au = p.querySelector('.username, .username-coloured');
+        return el ? { el, author: au ? au.textContent.trim() : '' } : null;
+    }).filter(Boolean);
+}
+
+function pjPageStarts(doc) {
+    const set = new Set();
+    doc.querySelectorAll('.pagination a[href*="start="]').forEach(a => { const m = (a.getAttribute('href') || '').match(/[?&]start=(\d+)/); if (m && +m[1] > 0) set.add(+m[1]); });
+    const arr = [...set].sort((a, b) => a - b);
+    if (!arr.length) return [];
+    const per = arr[0], max = arr[arr.length - 1], out = [];
+    for (let s = per; s <= max && out.length < 40; s += per) out.push(s);
+    return out;
+}
+
+async function projPickBanner(root) {
+    const srcs = [];
+    [...root.querySelectorAll('img')].slice(0, 24).forEach(im => {
+        const cls = (im.getAttribute('class') || '') + ' ' + (im.getAttribute('src') || '');
+        if (/smilies|smiley|emoji/i.test(cls) || im.closest('.signature, .sig')) return;
+        const raw = im.getAttribute('data-src') || im.getAttribute('data-lazy-src') || im.getAttribute('data-original') || im.getAttribute('src') || '';
+        if (!raw || /^data:/i.test(raw) || HARD_JUNK_RE.test(raw)) return;
+        const a = im.closest('a[href]'), ah = a ? (a.getAttribute('href') || '') : '';
+        const u = absUrl(/\.(?:jpe?g|png|webp|gif)(?:\?|$)/i.test(ah) ? ah : raw);
+        if (!srcs.includes(u)) srcs.push(u);
+    });
+    const probes = await Promise.all(srcs.slice(0, 16).map(s => projProbe(s)));
+    const ok = probes.filter(Boolean);
+    const panoramic = ok.find(x => x.w >= 400 && x.h >= 35 && (x.w / x.h) >= 2.0);
+    const wide = ok.find(x => x.w >= 450 && x.h >= 50 && (x.w / x.h) >= 1.5);
+    const best = panoramic || wide || null;
+    return best ? { src: best.src, wide: true, ratio: Math.max(2.2, Math.min(4.5, best.w / best.h)) } : null;
+}
+
+const projVisible = () => (!proj ? [] : (proj.group ? proj.items.filter(i => i._pGroup === proj.group) : proj.items));
+
+function pjApply(P) {
+    const parsed = pjParse(P.posts, P.item.id);
+    P.dup = parsed.dup; P.bad = parsed.bad; P.forums = parsed.forums; P.ext = parsed.ext; P.hasMagnet = parsed.hasMagnet; P.info = parsed.info;
+    P.items = parsed.entries.map((e, i) => projMakeItem(e, i));
+    const cnt = {};
+    P.items.forEach(it => { if (it._pGroup) cnt[it._pGroup] = (cnt[it._pGroup] || 0) + 1; });
+    P.items.forEach(it => { if (it._pGroup && cnt[it._pGroup] < 2) it._pGroup = ''; });
+    P.groups = Object.keys(cnt).filter(g => cnt[g] >= 2).map(g => ({ name: g, n: cnt[g] }));
+    if (P.groups.length < 2) { P.groups = []; P.items.forEach(it => { it._pGroup = ''; }); P.group = ''; }
+    projRefresh(P);
+}
+
+async function loadProject(P, page = 1) {
+    const run = ++P.run;
+    page = Math.max(1, parseInt(page, 10) || 1);
+    P.loading = true; P.err = ''; P.cur = page;
+    renderProjHead(); renderProjDoc();
+    try {
+        let ent = P.cache.get(page);
+        if (!ent) {
+            const base = new URL(P.item.url, SITE_ROOT);
+            if (page > 1) { base.searchParams.set('start', String((page - 1) * (P.per || 0))); await netGate(); }
+            const { doc } = await projFetchDoc(base.href);
+            if (P.run !== run) return;
+            const posts = pjPostsOf(doc);
+            if (!posts.length) {
+                const msg = ((doc.querySelector('#message') || {}).textContent || '').replace(/\s+/g, ' ').trim();
+                throw new Error(msg ? msg.slice(0, 120) : 'post principale non trovato (accesso richiesto?)');
+            }
+            if (page === 1) {
+                const starts = pjPageStarts(doc);
+                P.per = starts[0] || 0;
+                P.pages = starts.length + 1;
+                P.hasMagnet = !!posts[0].el.querySelector('a[href^="magnet:"]');
+                if (posts[0].author && !P.item.author) P.item.author = posts[0].author;
+
+                const bannerUrl = projFirstImgUrl(posts[0].el);
+                if (bannerUrl) {
+                    P.banner = bannerUrl;
+                    P.bannerWide = true;
+                    P.bannerRatio = 2.6;
+                    P.item.poster = P.banner;
+                    P.item.posterSrc = 'forum';
+                    P.item.posterTried = true;
+                    saveCache(P.item);
+                }
+            }
+            ent = { posts: posts.map(p => ({ author: p.author, html: pjSanitize(p.el) })) };
+            P.cache.set(page, ent);
+        }
+        P.loading = false;
+        renderProjHead(); renderProjDoc();
+    } catch (e) {
+        if (P.run !== run) return;
+        P.loading = false; P.err = (e && e.message) || 'errore di rete';
+        renderProjHead(); renderProjDoc();
+    }
+}
+
+function openProject(item) {
+    hideModal();
+    if (view.key === 'project' && proj && proj.item === item) return;
+    const app = $('mirseer-app');
+    const prev = { key: view.key, section: view.section, page: PG.page, scroll: app ? app.scrollTop : 0, project: (view.key === 'project' && proj) ? proj : null };
+    const P = { item, prev, items: [], posts: [], loading: true, err: '', banner: null, bannerWide: false, bannerRatio: 3, info: '', infoOpen: false, forums: [], ext: [], groups: [], group: '', dup: 0, bad: 0, run: 0, pages: 1, per: 0, cur: 1, pageDone: 0, hasMagnet: false, cache: new Map() };
+    proj = P;
+    setView('project');
+    loadProject(P, 1);
+}
+
+function projEmptyMsg() {
+    const P = proj;
+    if (!P) return 'Nessun contenuto.';
+    if (P.loading) return '\u23f3 Analisi del progetto in corso\u2026';
+    if (P.err) return `\u26a0\ufe0f Impossibile leggere il progetto (${esc(P.err)}).<br><br><button class="seer-load-btn" data-proj="retry">\ud83d\udd04 Riprova</button>`;
+    if (anyFilter() && lastBaseCount > 0) return 'Nessun contenuto corrisponde ai filtri attivi.';
+    const locked = P.posts && P.posts[0] && /ringrazi|thanks?/i.test(P.posts[0].el.textContent || '');
+    return `Nessun link a film, serie o altri contenuti trovato nel progetto.${locked ? '<br>Il topic potrebbe nascondere i contenuti finch\u00e9 non si ringrazia sul forum.' : ''}${P.hasMagnet ? '<br>Il progetto contiene magnet: usa il pulsante \ud83e\uddf2 in alto.' : ''}<br><br><a class="seer-load-btn" href="${esc(P.item.url)}" target="_blank" rel="noopener">\ud83d\udd17 Apri il topic sul forum</a>`;
+}
+
+function renderProjHead() {
+    const box = $('seer-proj-head');
+    if (!box) return;
+    if (view.key !== 'project' || !proj || search.active) { box.style.display = 'none'; box.innerHTML = ''; box.classList.remove('pj-sticky'); return; }
+    const P = proj, it = P.item;
+    const ss = $('seer-sort-select');
+    if (ss) ss.style.display = 'none';
+    const chips = [];
+    if (it.author) chips.push('👤 ' + esc(it.author));
+    if (it.ts) { const d = new Date(it.ts); if (!isNaN(d)) chips.push('📅 ' + esc(d.toLocaleDateString('it-IT'))); }
+    if (it.views) chips.push('👁️ ' + esc(fmtViews(it.views)));
+    if (it.replies) chips.push('💬 ' + esc(it.replies));
+    if (P.loading) chips.push('⏳ Caricamento…');
+    else if (P.pages > 1) chips.push('📄 Pagina ' + P.cur + '/' + P.pages);
+    const chipHtml = chips.map(c => `<span class="seer-chip">${c}</span>`).join('');
+    const nav = P.pages > 1
+        ? `<button class="seer-facet" data-pjpg="prev" title="Pagina precedente"${(P.loading || P.cur <= 1) ? ' disabled' : ''}>‹</button>` +
+          `<button class="seer-facet" data-pjpg="next" title="Pagina successiva"${(P.loading || P.cur >= P.pages) ? ' disabled' : ''}>›</button>`
+        : '';
+    box.innerHTML =
+        `<div class="seer-pj-toolbar">` +
+        `<button class="seer-facet" data-proj="back" title="Torna indietro">← Torna indietro</button>` +
+        `<h1 class="pj-tb-title">${esc(it.displayTitle)}</h1>` +
+        `<span class="pj-tb-chips">${chipHtml}</span>${nav}` +
+        (P.hasMagnet ? `<button class="seer-load-btn" data-proj="magnets" style="padding:6px 12px;font-size:12.5px;">🧲 Magnet</button>` : '') +
+        `<a class="seer-chip" href="${esc(it.url)}" target="_blank" rel="noopener" title="Apri il topic originale">🔗 Forum</a>` +
+        `</div>`;
+    box.classList.add('pj-sticky');
+    box.style.display = 'block';
+}
+
+function projHeadClick(e) {
+    if (view.key !== 'project' || !proj) return;
+    if (e.target.closest('.seer-pjdoc')) { pjDocClick(e); return; }
+    const pg = e.target.closest('[data-pjpg]');
+    if (pg) {
+        if (pg.disabled) return;
+        const v = pg.dataset.pjpg;
+        let n = proj.cur;
+        if (v === 'first') n = 1;
+        else if (v === 'prev') n = proj.cur - 1;
+        else if (v === 'next') n = proj.cur + 1;
+        else if (v === 'last') n = proj.pages;
+        else if (v === 'go') { const inp = pg.parentElement.querySelector('.seer-pg-jump'); if (!inp || !inp.value) return; n = inp.value; }
+        else n = v;
+        pjGoPage(proj, n);
+        return;
+    }
+    const b = e.target.closest('[data-proj]');
+    if (!b) return;
+    if (b.dataset.proj === 'back') closeProject();
+    else if (b.dataset.proj === 'magnets') openDetailModal(proj.item);
+    else if (b.dataset.proj === 'retry') loadProject(proj, proj.cur || 1);
+}
+
+GM_addStyle(`
+/* Nella pagina di una collezione NON compare nessun banner in alto */
+#mirseer-app[data-seer-view="project"] #seer-hero,
+#mirseer-app[data-seer-view="project"] .seer-pj-cover,
+#mirseer-app[data-seer-view="project"] .seer-proj-banner { display: none !important; }
+/* Tasto "Torna indietro" sempre visibile: compare quando la toolbar esce dallo schermo */
+#seer-pj-fab-back { display: none; position: fixed; top: calc(var(--seer-nav-h, 64px) + 10px); left: 276px; z-index: 120; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--seer-border); background: color-mix(in srgb, var(--seer-bg) 90%, transparent); color: var(--seer-text); font-size: 13px; font-weight: 800; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+#seer-pj-fab-back.show { display: inline-flex; }
+#seer-pj-fab-back:hover { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff; }
+@media (max-width: 980px) { #seer-pj-fab-back { left: 12px; } }
+`);
+function pjFabUpdate() {
+    const app = $('mirseer-app');
+    if (!app) return;
+    let b = $('seer-pj-fab-back');
+    if (!b) {
+        b = document.createElement('button');
+        b.id = 'seer-pj-fab-back';
+        b.type = 'button';
+        b.textContent = '← Torna indietro';
+        b.addEventListener('click', () => closeProject());
+        app.appendChild(b);
+    }
+    let show = false;
+    if (view.key === 'project' && proj && !search.active) {
+        const head = $('seer-proj-head');
+        const navH = (document.querySelector('.seer-nav') || {}).offsetHeight || 64;
+        if (head && head.style.display !== 'none') {
+            const r = head.getBoundingClientRect();
+            show = app.scrollTop > 60 && r.bottom < navH + 4;
+        } else show = app.scrollTop > 60;
+    }
+    b.classList.toggle('show', show);
+}
+
+const PJ_SHOW_COVER = false;
+let pjThemeObs = null, pjOpening = false, pjCtx = null;
+
+GM_addStyle(`
+.seer-proj-head.pj-sticky { position: sticky; top: var(--seer-nav-h, 0px); z-index: 30; padding: 6px 0; margin-bottom: 12px; background: color-mix(in srgb, var(--seer-bg) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.seer-pj-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border: 1px solid var(--seer-border); border-radius: 14px; background: var(--seer-card); }
+.pj-tb-title { flex: 1 1 220px; min-width: 0; margin: 0; font-size: 18px; font-weight: 800; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pj-tb-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.seer-pj-toolbar .seer-facet:disabled { opacity: .4; cursor: not-allowed; }
+.seer-pjdoc { color: var(--seer-text); font-size: 15px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+/* Override assoluto di sicurezza per testo forzato dal BBCode */
+#mirseer-app:not(.seer-light) .seer-pjdoc [color="black"],
+#mirseer-app:not(.seer-light) .seer-pjdoc [color="#000000"],
+#mirseer-app:not(.seer-light) .seer-pjdoc [color="#000"],
+#mirseer-app:not(.seer-light) .seer-pjdoc [style*="color: rgb(0, 0, 0)"],
+#mirseer-app:not(.seer-light) .seer-pjdoc [style*="color: black"],
+#mirseer-app:not(.seer-light) .seer-pjdoc [style*="color: #000"] {
+    color: var(--seer-text) !important;
+}
+#mirseer-app.seer-light .seer-pjdoc [color="white"],
+#mirseer-app.seer-light .seer-pjdoc [color="#ffffff"],
+#mirseer-app.seer-light .seer-pjdoc [color="#fff"],
+#mirseer-app.seer-light .seer-pjdoc [style*="color: rgb(255, 255, 255)"],
+#mirseer-app.seer-light .seer-pjdoc [style*="color: white"],
+#mirseer-app.seer-light .seer-pjdoc [style*="color: #fff"] {
+    color: var(--seer-text) !important;
+}
+.seer-pjdoc .pj-post { background: var(--seer-card); border: 1px solid var(--seer-border); border-radius: 16px; padding: 18px 20px; margin: 0 0 16px; overflow: hidden; }
+.seer-pjdoc .pj-author { font-size: 12.5px; font-weight: 800; color: var(--seer-text-muted); margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--seer-border); }
+.seer-pjdoc .pj-body { min-width: 0; }
+.seer-pjdoc img { max-width: 100% !important; height: auto !important; }
+.seer-pjdoc video, .seer-pjdoc canvas, .seer-pjdoc svg { max-width: 100%; height: auto; }
+.seer-pjdoc .pj-tablewrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0; }
+.seer-pjdoc table { max-width: none; border-collapse: collapse; }
+.seer-pjdoc td, .seer-pjdoc th { vertical-align: top; padding: 4px 8px; }
+
+/* Adattamento banner panoramico per le righe dei progetti */
+.seer-row[data-topic-type="Progetti e Collezioni"] .seer-poster-wrap,
+.seer-row.is-proj .seer-poster-wrap {
+    min-width: 110px !important;
+    max-width: 140px !important;
+    height: 64px !important;
+    aspect-ratio: 16 / 9 !important;
+}
+.seer-row[data-topic-type="Progetti e Collezioni"] .seer-poster,
+.seer-row.is-proj .seer-poster {
+    max-width: 100% !important;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+}
+
+/* Fix contrasto assoluto per spoiler, sfondi e testi in Dark Mode */
+#mirseer-app:not(.seer-light) .seer-pjdoc,
+#mirseer-app:not(.seer-light) .seer-pjdoc .spoiler,
+#mirseer-app:not(.seer-light) .seer-pjdoc .spoilerbox,
+#mirseer-app:not(.seer-light) .seer-pjdoc [class*="spoiler"] {
+    background-color: var(--seer-card) !important;
+    color: var(--seer-text) !important;
+}
+#mirseer-app:not(.seer-light) .seer-pjdoc div,
+#mirseer-app:not(.seer-light) .seer-pjdoc p,
+#mirseer-app:not(.seer-light) .seer-pjdoc span,
+#mirseer-app:not(.seer-light) .seer-pjdoc font {
+    background-color: transparent !important;
+}
+/* Se il testo dentro allo spoiler è forzato bianco/grigio chiaro, lo rende leggibile */
+#mirseer-app:not(.seer-light) .seer-pjdoc [style*="color"],
+#mirseer-app:not(.seer-light) .seer-pjdoc font[color] {
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+
+
+/* Toolbar del progetto sempre visibile (sticky) in cima allo schermo */
+.seer-proj-head.pj-sticky {
+    position: sticky !important;
+    top: var(--seer-nav-h, 64px) !important;
+    z-index: 100 !important;
+    padding: 8px 0 !important;
+    margin-bottom: 14px !important;
+    background: rgba(7, 9, 14, 0.94) !important;
+    backdrop-filter: blur(14px) !important;
+    -webkit-backdrop-filter: blur(14px) !important;
+}
+#mirseer-app.seer-light .seer-proj-head.pj-sticky {
+    background: rgba(244, 246, 251, 0.94) !important;
+}
+
+.seer-pjdoc pre { max-width: 100%; overflow-x: auto; white-space: pre-wrap; }
+.seer-pjdoc a { color: var(--seer-accent, #818cf8); text-decoration: underline; text-underline-offset: 2px; }
+#mirseer-app.seer-light .seer-pjdoc a { color: #4338ca; }
+.seer-pjdoc blockquote, .seer-pjdoc .quotecontent, .seer-pjdoc .spoiler, .seer-pjdoc .spoilerbox, .seer-pjdoc [class*="spoiler"][class*="content"] { background: rgba(127,127,127,.10); color: inherit; border: 1px solid var(--seer-border); border-radius: 10px; padding: 8px 12px; margin: 8px 0; }
+.seer-pjdoc .quotetitle, .seer-pjdoc summary, .seer-pjdoc .pj-spbtn, .seer-pjdoc [class*="spoiler"][class*="title"], .seer-pjdoc [class*="spoiler"][class*="head"] { cursor: pointer; user-select: none; }
+.seer-pjdoc .pj-spbtn { display: inline-block; padding: 2px 10px; margin-left: 6px; border-radius: 8px; border: 1px solid var(--seer-border); background: rgba(127,127,127,.15); font-size: 12px; font-weight: 700; }
+@media (max-width: 720px) { .seer-pjdoc .pj-post { padding: 12px; } .pj-tb-title { font-size: 15px; } }
+`);
+
+function pjRGB(str) {
+    if (!str) return null;
+    try {
+        if (!pjCtx) pjCtx = document.createElement('canvas').getContext('2d');
+        pjCtx.fillStyle = '#010203';
+        pjCtx.fillStyle = String(str).trim();
+        const v = pjCtx.fillStyle;
+        if (v === '#010203') return null;
+        let m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+        if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1];
+        m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/.exec(v);
+        return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null;
+    } catch (e) { return null; }
+}
+function pjLum(rgb) {
+    const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+}
+const pjContrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
+const PJ_KILL = 'script,style,noscript,iframe,frame,frameset,object,embed,applet,form,textarea,select,option,optgroup,link,meta,base,.signature,.sig,.post-buttons,.back2top,.notice,.postprofile';
+function pjSanitize(src) {
+    const el = src.cloneNode(true);
+    const doc = el.ownerDocument;
+    el.querySelectorAll('input[type="button"], input[type="submit"], button').forEach(b => {
+        const oc = b.getAttribute('onclick') || '';
+        const near = b.closest('.spoiler, .spoilerbox, .spoiler-box, .quotetitle, [class*="spoiler"]');
+        if (near || /display|toggle|spoiler|collaps/i.test(oc)) {
+            const s = doc.createElement('span');
+            s.className = 'pj-spbtn'; s.setAttribute('role', 'button'); s.setAttribute('tabindex', '0');
+            s.textContent = (b.value || b.textContent || 'Mostra').trim() || 'Mostra';
+            b.replaceWith(s);
+        } else b.remove();
+    });
+    el.querySelectorAll(PJ_KILL).forEach(n => n.remove());
+    el.querySelectorAll('input').forEach(n => n.remove());
+    el.querySelectorAll('[class*="thank"], [id*="thank"]').forEach(n => {
+        if ((n.textContent || '').length < 400 && !n.querySelector('a[href*="viewtopic"]')) n.remove();
+    });
+    el.querySelectorAll('*').forEach(n => {
+        const tag = n.tagName;
+        [...n.attributes].forEach(at => { if (/^on/i.test(at.name) || at.name === 'srcdoc' || at.name === 'formaction') n.removeAttribute(at.name); });
+        const h = n.getAttribute('href');
+        if (h !== null && /^\s*(?:javascript|data|vbscript):/i.test(h)) n.removeAttribute('href');
+        if (n.style) {
+            let c = n.style.color;
+            if (!c && tag === 'FONT') c = n.getAttribute('color') || '';
+            if (c) {
+                const rgb = pjRGB(c);
+                if (rgb && rgb[3] > 0) {
+                    const isNeutral = (Math.max(rgb[0], rgb[1], rgb[2]) - Math.min(rgb[0], rgb[1], rgb[2]) < 28) && (pjLum(rgb) < 0.22 || pjLum(rgb) > 0.78);
+                    if (!isNeutral) {
+                        n.setAttribute('data-pjc', c);
+                        n.setAttribute('data-pjcl', pjLum(rgb).toFixed(4));
+                    }
+                }
+            }
+            n.style.removeProperty('color');
+            n.style.removeProperty('background-color');
+            if (/^(fixed|sticky)$/.test(n.style.position)) n.style.removeProperty('position');
+        }
+        if (tag === 'FONT') n.removeAttribute('color');
+        n.removeAttribute('bgcolor');
+        if (tag === 'IMG') {
+            const raw = n.getAttribute('data-src') || n.getAttribute('data-lazy-src') || n.getAttribute('data-original') || n.getAttribute('src') || '';
+            if (raw && !/^data:/i.test(raw)) n.setAttribute('src', absUrl(raw));
+            n.removeAttribute('srcset'); n.removeAttribute('height');
+            n.setAttribute('loading', 'lazy'); n.setAttribute('decoding', 'async');
+        }
+        if (tag === 'A' && n.getAttribute('href') !== null) {
+            const href = n.getAttribute('href') || '';
+            const special = /^#/.test(href) || /^(?:magnet|mailto):/i.test(href);
+            if (!special) n.setAttribute('href', absUrl(href));
+            const ref = special ? null : pjTopicRef(n);
+            const mine = !!ref && !ref.bad && (ref.key || (ref.forum && forumToSection.has(ref.forum)));
+            if (!mine && !special) { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener noreferrer'); }
+            else n.removeAttribute('target');
+        }
+    });
+    el.querySelectorAll('table').forEach(t => {
+        if (t.parentElement && t.parentElement.closest('.pj-tablewrap')) return;
+        const w = doc.createElement('div'); w.className = 'pj-tablewrap';
+        t.parentNode.insertBefore(w, t); w.appendChild(t);
+    });
+    return el.innerHTML;
+}
+
+function pjApplyTheme(root) {
+    const app = $('mirseer-app');
+    if (!root || !app) return;
+    const dark = !app.classList.contains('seer-light');
+    const pageL = dark ? 0.005 : 0.92;
+    root.querySelectorAll('[data-pjbg]').forEach(n => {
+        n.style.removeProperty('background-color');
+    });
+    root.querySelectorAll('[data-pjc]').forEach(n => {
+        const L = parseFloat(n.getAttribute('data-pjcl'));
+        if (pjContrast(L, pageL) >= 2.8) {
+            n.style.color = n.getAttribute('data-pjc');
+        } else {
+            n.style.removeProperty('color');
+        }
+    });
+}
+function pjWatchTheme() {
+    const app = $('mirseer-app');
+    if (pjThemeObs || !app || !window.MutationObserver) return;
+    pjThemeObs = new MutationObserver(() => { if (view.key === 'project') pjApplyTheme($('seer-main-list')); });
+    pjThemeObs.observe(app, { attributes: true, attributeFilter: ['class'] });
+}
+
+const PJ_SP_HEAD = '.pj-spbtn, .spoiler-title, .spoilertitle, .spoiler_title, .spoiler-head, .spoilerhead, .quotetitle, [class*="spoiler"][class*="title"], [class*="spoiler"][class*="head"], [class*="spoiler"][class*="button"], [class*="spoiler"][class*="toggle"]';
+const pjHiddenNow = n => !!n.hidden || getComputedStyle(n).display === 'none';
+function pjSpoilerBody(ctl) {
+    const head = ctl.closest('.quotetitle, .spoiler-title, .spoilertitle, .spoiler_title, .spoiler-head, .spoilerhead, [class*="spoiler"][class*="title"], [class*="spoiler"][class*="head"]') || ctl;
+    const looks = n => /spoiler|quotecontent|collapse|sp-?body|sp-?content/i.test(n.className || '');
+    for (let n = head, d = 0; n && d < 4 && !(n.classList && n.classList.contains('seer-pjdoc')); n = n.parentElement, d++) {
+        const s = n.nextElementSibling;
+        if (!s) continue;
+        if (pjHiddenNow(s) || looks(s)) return s;
+        const inner = [...s.children].find(pjHiddenNow);
+        if (inner) return inner;
+    }
+    return null;
+}
+function pjSpoilerClick(e) {
+    const ctl = e.target.closest(PJ_SP_HEAD);
+    if (!ctl || e.target.closest('a[href]')) return false;
+    const body = pjSpoilerBody(ctl);
+    if (!body) return false;
+    const wasHidden = pjHiddenNow(body);
+    body.hidden = false;
+    body.style.display = wasHidden ? 'block' : 'none';
+    if (ctl.classList.contains('pj-spbtn')) ctl.textContent = wasHidden ? 'Nascondi' : 'Mostra';
+    e.preventDefault(); e.stopPropagation();
+    return true;
+}
+
+function pjLinkTitle(a) {
+    const ok = t => pjGood(t) && projTitleOk(t);
+    let t = pjCleanTitle((a.textContent || '').replace(/\s+/g, ' '));
+    if (!ok(t)) { const im = a.querySelector('img'); t = im ? pjCleanTitle(im.getAttribute('alt') || im.getAttribute('title') || '') : ''; }
+    if (!ok(t)) t = pjCleanTitle(a.getAttribute('title') || '');
+    return ok(t) ? t : '';
+}
+
+async function pjOpenTopic(ref, text) {
+    if (pjOpening) return;
+    pjOpening = true;
+    const app = $('mirseer-app');
+    let key = String(ref.key), url = ref.url, title = text || '', doc = null;
+    try {
+        if (!registry.get(key) && (!title || key[0] === 'p')) {
+            if (app) app.style.cursor = 'progress';
+            try {
+                doc = (await fetchTopicPage(url)).doc;
+                const a = doc.querySelector('h2.topic-title a, .topic-title a, h2 a[href*="viewtopic.php"]');
+                const tid = a ? ((a.getAttribute('href') || '').match(/[?&]t=(\d+)/) || [])[1] : null;
+                if (key[0] === 'p') {
+                    if (!tid) throw new Error('topic non risolvibile');
+                    key = tid; url = SITE_ROOT + 'viewtopic.php?t=' + tid;
+                }
+                if (!title) {
+                    let t = a ? a.textContent.replace(/\s+/g, ' ').trim() : '';
+                    if (!t) t = String(doc.title || '').replace(/\s+[-\u2013|]\s+[^-\u2013|]*$/, '').trim();
+                    title = t;
+                }
+            } catch (err) {
+                if (key[0] === 'p') { window.open(url, '_blank', 'noopener'); return; }
+            }
+        }
+        const it = projMakeItem({ key, url, text: title }, 0);
+        if (doc) projTypeFromCrumbs(it, doc);
+        if (isProjectItem(it)) openProject(it); else openDetailModal(it);
+    } finally {
+        pjOpening = false;
+        if (app) app.style.cursor = '';
+    }
+}
+
+function pjDocClick(e) {
+    if (pjSpoilerClick(e)) return;
+    const a = e.target.closest('.seer-pjdoc a[href]');
+    if (!a) return;
+    if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const href = a.getAttribute('href') || '';
+    if (/^(?:#|magnet:|mailto:)/i.test(href)) return;
+    const ref = pjTopicRef(a);
+    if (!ref || ref.bad) return;
+    e.preventDefault(); e.stopPropagation();
+    if (ref.forum) {
+        if (forumToSection.has(ref.forum)) setView('section', { id: ref.forum, name: forumToSection.get(ref.forum) });
+        else window.open(a.href, '_blank', 'noopener');
+        return;
+    }
+    pjOpenTopic(ref, pjLinkTitle(a));
+}
+
+function pjPagerHtml(P) {
+    if (P.pages <= 1) return '';
+    const c = P.cur, t = P.pages, busy = P.loading;
+    const nums = pgWindow(c, t).map(n => n === '…'
+        ? '<span class="seer-pg-dots">…</span>'
+        : `<button class="seer-pg-btn ${n === c ? 'active' : ''}" data-pjpg="${n}"${busy ? ' disabled' : ''}>${n}</button>`).join('');
+    const nav = (v, label, off, title) => `<button class="seer-pg-btn" data-pjpg="${v}" title="${title}"${(off || busy) ? ' disabled' : ''}>${label}</button>`;
+    return `<div class="seer-pager seer-pj-pager">` +
+        nav('first', '«', c <= 1, 'Prima pagina') + nav('prev', '‹', c <= 1, 'Pagina precedente') + nums +
+        nav('next', '›', c >= t, 'Pagina successiva') + nav('last', '»', c >= t, 'Ultima pagina') +
+        `<span class="seer-pg-info">Pagina ${c} di ${t}</span>` +
+        `<input type="number" class="seer-adv-input seer-pg-jump" min="1" max="${t}" placeholder="Vai a…">` +
+        `<button class="seer-pg-btn" data-pjpg="go"${busy ? ' disabled' : ''}>Vai</button></div>`;
+}
+function pjGoPage(P, n) {
+    n = Math.max(1, Math.min(P.pages, parseInt(n, 10) || 1));
+    if (P.loading || n === P.cur) return;
+    const app = $('mirseer-app');
+    if (app) app.scrollTop = 0;
+    loadProject(P, n);
+}
+
+function renderProjDoc() {
+    if (view.key !== 'project' || !proj || search.active) return;
+    const P = proj, box = $('seer-main-list');
+    if (!box) return;
+    box.classList.remove('seer-grid');
+    lastDisplayed = [];
+    const cnt = $('seer-count'); if (cnt) cnt.innerText = '';
+    if (P.err) {
+        box.innerHTML = `<p class="seer-status-msg">⚠️ Impossibile leggere il progetto (${esc(P.err)}).<br><br><button class="seer-load-btn" data-proj="retry">🔄 Riprova</button></p>`;
+        return;
+    }
+    const ent = P.cache.get(P.cur);
+    if (!ent) { box.innerHTML = '<p class="seer-status-msg">⏳ Caricamento del progetto…</p>'; return; }
+    const posts = ent.posts.map((p, i) => {
+        const reply = P.cur > 1 || i > 0;
+        return `<article class="pj-post${reply ? ' pj-reply' : ''}">` +
+            (reply ? `<div class="pj-author">👤 ${esc(p.author || 'Utente')}</div>` : '') +
+            `<div class="pj-body">${p.html}</div></article>`;
+    }).join('');
+    const pager = pjPagerHtml(P);
+    box.innerHTML = `<div class="seer-pjdoc">${posts}</div>${pager}`;
+    pjApplyTheme(box);
+    pjWatchTheme();
+}
+
+const DL_KEY = 'dlLog';
+let dlLog = (() => { const d = getPref(DL_KEY, {}); return (d && typeof d === 'object' && !Array.isArray(d)) ? d : {}; })();
+let dlTimer = null;
+function saveDlNow() { clearTimeout(dlTimer); dlTimer = null; try { setPref(DL_KEY, dlLog); } catch (e) {} }
+function saveDl() { if (!dlTimer) dlTimer = setTimeout(saveDlNow, 500); }
+function dlQuality(it) {
+    const m = it && it.meta;
+    const vid = it && (VIDEO_TYPES.has(it.type) || effKind(it) === 'video');
+    if (!m || !vid) return 'other';
+    return m.is4k ? '4k' : m.is1080p ? '1080' : m.is720p ? '720' : 'sd';
+}
+function trackDl(it, uris, via) {
+    try {
+        uris = (uris || []).filter(u => /^magnet:/i.test(String(u)));
+        if (!uris.length) return;
+        const now = Date.now();
+        const known = uris.map(u => { const x = String(u).match(/[?&]xl=(\d+)/i); return x ? +x[1] : 0; });
+        const fallback = (!known.some(Boolean) && it && it.sizeBytes) ? it.sizeBytes / uris.length : 0;
+        uris.forEach((u, i) => {
+            const key = magnetKey(u), old = dlLog[key];
+            dlLog[key] = {
+                id: it ? String(it.id) : '', t: it ? (it.displayTitle || it.rawTitle || '') : magnetDn(u), u: it ? (it.url || '') : '',
+                r: it ? (it.author || '') : '', q: dlQuality(it), ty: it ? (it.type || '') : '',
+                b: known[i] || fallback || (old && old.b) || 0, ts: old ? old.ts : now, last: now, n: (old ? old.n : 0) + 1, via
+            };
+        });
+        const keys = Object.keys(dlLog);
+        if (keys.length > 8000) keys.sort((a, b) => (dlLog[a].last || 0) - (dlLog[b].last || 0)).slice(0, keys.length - 8000).forEach(k => delete dlLog[k]);
+        saveDl();
+    } catch (e) {}
+}
+function forumPageItem() {
+    try {
+        if (!/viewtopic\.php/i.test(location.pathname)) return null;
+        const t = new URLSearchParams(location.search).get('t');
+        if (t && registry.get(t)) return registry.get(t);
+        const a = document.querySelector('h2.topic-title a, .topic-title a');
+        const title = a ? a.textContent.replace(/\s+/g, ' ').trim() : String(document.title || '').replace(/\s+[-\u2013|]\s+[^-\u2013|]*$/, '');
+        const au = document.querySelector('.post .username, .post .username-coloured');
+        let type = 'Film';
+        const ids = [...document.querySelectorAll('.breadcrumbs a[href*="viewforum.php"], #nav-breadcrumbs a[href*="viewforum.php"]')].map(x => ((x.getAttribute('href') || '').match(/[?&]f=(\d+)/) || [])[1]).filter(Boolean).reverse();
+        for (const id of ids) { const nm = forumToSection.get(id); if (nm) { type = nm; break; } }
+        return buildItem({ topicId: t || '0', href: location.href, raw: title || 'Topic', type, author: au ? au.textContent.trim() : '' });
+    } catch (e) { return null; }
+}
+function dlStats() {
+    const S = { n: 0, clicks: 0, bytes: 0, noSize: 0, rel: {}, q: { '4k': { n: 0, b: 0 }, '1080': { n: 0, b: 0 }, '720': { n: 0, b: 0 }, sd: { n: 0, b: 0 }, other: { n: 0, b: 0 } }, months: {}, rows: Object.values(dlLog) };
+    S.n = S.rows.length;
+    S.rows.forEach(r => {
+        S.clicks += r.n || 1; S.bytes += r.b || 0; if (!r.b) S.noSize++;
+        const rn = r.r || 'Sconosciuto';
+        const o = S.rel[rn] || (S.rel[rn] = { n: 0, b: 0 }); o.n++; o.b += r.b || 0;
+        const q = S.q[r.q] || S.q.other; q.n++; q.b += r.b || 0;
+        const d = new Date(r.ts || Date.now());
+        const mk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        const m = S.months[mk] || (S.months[mk] = { n: 0, b: 0 }); m.n++; m.b += r.b || 0;
+    });
+    return S;
+}
+function dlExport() {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(dlLog, null, 2)], { type: 'application/json' }));
+    a.download = 'mirseer-attivita.json';
+    a.dataset.seerTracked = '1';
+    document.body.appendChild(a); a.click(); a.remove();
+}
+
+const acct = { tab: 'profile', prev: null, uid: null, profile: null, pLoading: false, pErr: '', extra: [], page: 'front', pageData: null, pageLoading: false, pageErr: '', saving: false, saveMsg: null, relMetric: 'count' };
+const UCP_MODS = [
+    { k: 'front', g: 'Panoramica', l: 'Panoramica', q: 'i=ucp_main&mode=front', t: 'view' },
+    { k: 'subscribed', g: 'Panoramica', l: 'Sottoscrizioni', q: 'i=ucp_main&mode=subscribed', t: 'list' },
+    { k: 'bookmarks', g: 'Panoramica', l: 'Segnalibri', q: 'i=ucp_main&mode=bookmarks', t: 'list' },
+    { k: 'drafts', g: 'Panoramica', l: 'Bozze', q: 'i=ucp_main&mode=drafts', t: 'view' },
+    { k: 'profile_info', g: 'Profilo', l: 'Modifica profilo', q: 'i=ucp_profile&mode=profile_info', t: 'edit' },
+    { k: 'reg_details', g: 'Profilo', l: 'Dati account', q: 'i=ucp_profile&mode=reg_details', t: 'ro' },
+    { k: 'signature', g: 'Profilo', l: 'Firma', q: 'i=ucp_profile&mode=signature', t: 'edit' },
+    { k: 'avatar', g: 'Profilo', l: 'Avatar', q: 'i=ucp_profile&mode=avatar', t: 'ro' },
+    { k: 'personal', g: 'Preferenze', l: 'Impostazioni personali', q: 'i=ucp_prefs&mode=personal', t: 'edit' },
+    { k: 'view', g: 'Preferenze', l: 'Opzioni di visualizzazione', q: 'i=ucp_prefs&mode=view', t: 'edit' },
+    { k: 'post', g: 'Preferenze', l: 'Preferenze messaggi', q: 'i=ucp_prefs&mode=post', t: 'edit' },
+    { k: 'notif', g: 'Preferenze', l: 'Notifiche', q: 'i=ucp_notifications&mode=notification_options', t: 'edit' },
+    { k: 'attach', g: 'Altro', l: 'Allegati', q: 'i=ucp_attachments&mode=attachments', t: 'view' },
+    { k: 'friends', g: 'Altro', l: 'Amici', q: 'i=ucp_zebra&mode=friends', t: 'view' },
+    { k: 'foes', g: 'Altro', l: 'Nemici', q: 'i=ucp_zebra&mode=foes', t: 'view' }
+];
+const acctMods = () => UCP_MODS.concat(acct.extra);
+const UF_IGNORE = /^(?:form_token|creation_time|sid|submit|cur_password|confirm_code|confirm_id|lastclick)$/;
+
+async function acctFetch(url, opt) {
+    const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, opt || {}));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const html = await r.text();
+    return { doc: new DOMParser().parseFromString(html, 'text/html'), html, url: r.url };
+}
+function acctCheckAuth(doc) {
+    if (!doc.querySelector('a[href*="mode=logout"]') && doc.querySelector('form[action*="mode=login"], #login_form, input[name="login"], input[name="password"]')) throw new Error('sessione non attiva: accedi al forum');
+}
+async function acctUid() {
+    if (acct.uid) return acct.uid;
+    if (currentUser && currentUser.uid) { acct.uid = currentUser.uid; return acct.uid; }
+    const { doc } = await acctFetch(SITE_ROOT + 'ucp.php');
+    acctCheckAuth(doc);
+    const a = [...doc.querySelectorAll('a[href*="mode=viewprofile"]')].find(x => /[?&]u=\d+/.test(x.getAttribute('href') || '') && (!currentUser || x.textContent.trim() === currentUser.name)) || doc.querySelector('a[href*="mode=viewprofile"][href*="u="]');
+    const uid = a ? ((a.getAttribute('href').match(/[?&]u=(\d+)/) || [])[1]) : null;
+    if (!uid) throw new Error('ID utente non trovato');
+    acct.uid = uid; if (currentUser) currentUser.uid = uid;
+    return uid;
+}
+const acctTxt = el => (el ? (el.textContent || '') : '').replace(/\s+/g, ' ').trim();
+
+function acctParseProfile(doc, uid) {
+    const scope = doc.querySelector('#page-body') || doc.body;
+    const out = { uid, name: '', avatar: '', rank: '', rankImg: '', sections: [], actions: [] };
+    const av = scope.querySelector('#viewprofile img.avatar, img.avatar, .profile-avatar img');
+    if (av && av.getAttribute('src') && !/^data:/.test(av.getAttribute('src'))) out.avatar = absUrl(av.getAttribute('src'));
+    const rk = scope.querySelector('.profile-rank');
+    if (rk) { out.rank = acctTxt(rk); const im = rk.querySelector('img'); if (im) out.rankImg = absUrl(im.getAttribute('src') || ''); }
+    const map = new Map();
+    scope.querySelectorAll('dt').forEach(dt => {
+        if (dt.closest('.topiclist, .forumbg, .navbar, #nav-footer, .postprofile, .jumpbox') || dt.classList.contains('profile-avatar')) return;
+        const dd = dt.nextElementSibling;
+        if (!dd || dd.tagName !== 'DD') return;
+        const label = acctTxt(dt).replace(/[:\uff1a]\s*$/, '');
+        if (!label) return;
+        let val = '';
+        const sel = dd.querySelector('select');
+        val = sel ? acctTxt(sel.selectedOptions && sel.selectedOptions[0]) : acctTxt(dd);
+        if (!val) return;
+        const link = dd.querySelector('a[href^="http"], a[href^="/"], a[href^="./"]');
+        const panel = dt.closest('.panel, .column1, .column2, fieldset');
+        const h = panel && panel.querySelector('h3, h2, legend');
+        const title = acctTxt(h) || 'Profilo';
+        const sec = map.get(title) || (map.set(title, []), map.get(title));
+        if (!sec.some(r => r.l === label && r.v === val)) sec.push({ l: label, v: val, h: link ? absUrl(link.getAttribute('href')) : '' });
+        if (/^(?:nome utente|username|utente)$/i.test(label) && !out.name) out.name = val;
+    });
+    map.forEach((rows, title) => out.sections.push({ title, rows }));
+    if (!out.name) out.name = acctTxt(scope.querySelector('#viewprofile .username, #viewprofile .username-coloured, .username-coloured, .username')) || (currentUser && currentUser.name) || 'Account';
+    scope.querySelectorAll('a[href*="search.php?author_id"]').forEach(a => { const u = absUrl(a.getAttribute('href')); if (!out.actions.some(x => x.url === u)) out.actions.push({ url: u, text: acctTxt(a) || 'Cerca messaggi' }); });
+    return out;
+}
+
+function acctCleanForm(form) {
+    const f = document.importNode(form, true);
+    f.querySelectorAll('script, style, iframe, object, embed, link, noscript, #format-buttons, .bbcode-buttons, #colour_palette, #smiley-box, #attach-panel, #attach-panel-multi, input[type=file], input[type=button], input[type=submit], input[type=reset], button, .submit-buttons, .action-bar').forEach(n => n.remove());
+    f.querySelectorAll('*').forEach(n => {
+        [...n.attributes].forEach(at => { if (/^on/i.test(at.name) || /^\s*javascript:/i.test(at.value)) n.removeAttribute(at.name); });
+        if (n.tagName === 'LABEL' && n.getAttribute('for')) n.setAttribute('for', 'seer-uf-' + n.getAttribute('for'));
+        if (n.id) n.id = 'seer-uf-' + n.id;
+        if (n.tagName === 'A') { n.setAttribute('href', absUrl(n.getAttribute('href') || '')); n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
+    });
+    return f;
+}
+function acctParseView(main) {
+    const blocks = [];
+    main.querySelectorAll('.panel, fieldset').forEach(p => {
+        if (p.parentElement && p.parentElement.closest('.panel, fieldset')) return;
+        const rows = [];
+        p.querySelectorAll('dt').forEach(dt => { const dd = dt.nextElementSibling; if (dd && dd.tagName === 'DD') { const l = acctTxt(dt).replace(/[:\uff1a]\s*$/, ''), v = acctTxt(dd); if (l && v) rows.push({ l, v }); } });
+        const paras = [...p.querySelectorAll('p')].map(acctTxt).filter(x => x.length > 2).slice(0, 8);
+        const title = acctTxt(p.querySelector('h2, h3, legend'));
+        if (rows.length || paras.length) blocks.push({ title, rows, paras });
+    });
+    return blocks;
+}
+function acctParseTopics(main) {
+    const out = [], seen = new Set();
+    main.querySelectorAll('a[href*="viewtopic.php"]').forEach(a => {
+        const ref = pjTopicRef(a), t = acctTxt(a);
+        if (!ref || !ref.key || seen.has(ref.key) || !pjGood(t)) return;
+        seen.add(ref.key); out.push({ key: ref.key, url: ref.url, text: t });
+    });
+    return out;
+}
+function acctDiscover(doc) {
+    doc.querySelectorAll('#tabs a[href*="ucp.php"], #navigation a[href*="ucp.php"], #cp-menu a[href*="ucp.php"]').forEach(a => {
+        const q = ((a.getAttribute('href') || '').match(/ucp\.php\?(.*)$/) || [])[1];
+        const i = q && (q.match(/(?:^|&)i=([\w-]+)/) || [])[1];
+        if (!q || !i || /mode=(?:logout|login)/.test(q)) return;
+        const clean = q.replace(/&amp;/g, '&').replace(/&?sid=[0-9a-f]+/i, '');
+        const mode = (clean.match(/(?:^|&)mode=([\w-]+)/) || [])[1] || '';
+        if (acctMods().some(m => m.q === 'i=' + i + (mode ? '&mode=' + mode : '') || m.q.startsWith('i=' + i + '&mode=' + mode))) return;
+        const l = acctTxt(a);
+        if (l) acct.extra.push({ k: 'x_' + i + '_' + mode, g: 'Dal sito', l, q: clean, t: 'view' });
+    });
+}
+
+async function acctLoad(force) {
+    if (acct.tab === 'profile') {
+        if (acct.profile && !force) return;
+        acct.pLoading = true; acct.pErr = ''; renderAccountPage();
+        try {
+            const uid = await acctUid();
+            const { doc } = await acctFetch(SITE_ROOT + 'memberlist.php?mode=viewprofile&u=' + encodeURIComponent(uid));
+            acctCheckAuth(doc);
+            acct.profile = acctParseProfile(doc, uid);
+        } catch (e) { acct.pErr = (e && e.message) || 'errore di rete'; }
+        acct.pLoading = false;
+        if (view.key === 'account' && acct.tab === 'profile') renderAccountPage();
+    } else if (acct.tab === 'settings') {
+        if (!acct.pageData || force) acctLoadPage(acctMods().find(m => m.k === acct.page) || acctMods()[0]);
+    } else renderAccountPage();
+}
+
+async function acctLoadPage(mod, keepMsg) {
+    const myMod = mod;
+    acct.page = mod.k; acct.pageData = null; acct.pageErr = ''; acct.pageLoading = true;
+    if (!keepMsg) acct.saveMsg = null;
+    renderAccountPage();
+    try {
+        const { doc } = await acctFetch(SITE_ROOT + 'ucp.php?' + mod.q);
+        acctCheckAuth(doc);
+        if (acct.page !== myMod.k) return;
+        acctDiscover(doc);
+        const main = doc.querySelector('#cp-main, #page-body') || doc.body;
+        const err = acctTxt(doc.querySelector('#message .inner, #message'));
+        if (!main.querySelector('form, .panel') && err) throw new Error(err.slice(0, 160));
+        const d = { mod, topics: [], blocks: [], formEl: null, ro: mod.t === 'ro', submitName: 'submit', submitValue: 'Invia', action: '', hasPager: !!main.querySelector('.pagination') };
+        const form = [...main.querySelectorAll('form')].find(f => /ucp\.php/i.test(f.getAttribute('action') || '') && f.querySelector('dl input, dl select, dl textarea'));
+        if (form && (mod.t === 'edit' || mod.t === 'ro')) {
+            const sub = form.querySelector('input[type=submit][name=submit], button[name=submit], input[name="submit"]');
+            if (sub) { d.submitName = sub.getAttribute('name') || 'submit'; d.submitValue = sub.getAttribute('value') || sub.textContent.trim() || 'Invia'; }
+            d.action = form.getAttribute('action') || ('./ucp.php?' + mod.q);
+            d.formEl = acctCleanForm(form);
+            if (d.formEl.querySelector('input[type=password]')) d.ro = true;
+            if (d.ro) d.formEl.querySelectorAll('input, select, textarea').forEach(el => { if (el.type !== 'hidden') el.disabled = true; });
+        }
+        if (mod.t === 'list') d.topics = acctParseTopics(main);
+        if (!d.formEl) d.blocks = acctParseView(main);
+        acct.pageData = d;
+    } catch (e) { if (acct.page === myMod.k) acct.pageErr = (e && e.message) || 'errore di rete'; }
+    acct.pageLoading = false;
+    if (view.key === 'account' && acct.tab === 'settings') renderAccountPage();
+}
+
+const acctFdMap = fd => { const m = new Map(); for (const [k, v] of fd.entries()) { if (typeof v !== 'string') continue; (m.get(k) || (m.set(k, []), m.get(k))).push(v.replace(/\r\n/g, '\n').trim()); } return m; };
+function acctPaintMsg() {
+    const el = $('seer-uf-msg');
+    if (!el) return;
+    const m = acct.saveMsg;
+    el.innerHTML = m ? `<span class="seer-ac-msg ${esc(m.k)}">${esc(m.t)}</span>` : '';
+}
+async function acctSave() {
+    const d = acct.pageData;
+    if (!d || !d.formEl || d.ro || acct.saving) return;
+    acct.saving = true; acct.saveMsg = { k: '', t: '\u23f3 Salvataggio in corso\u2026' }; acctPaintMsg();
+    try {
+        const fd = new FormData(d.formEl);
+        if (!fd.has(d.submitName)) fd.append(d.submitName, d.submitValue);
+        const sent = acctFdMap(fd);
+        const r = await fetch(new URL(d.action, SITE_ROOT).href, { method: 'POST', body: fd, credentials: 'same-origin' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const rdoc = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const errEl = rdoc.querySelector('p.error, .error');
+        if (errEl && acctTxt(errEl)) throw new Error(acctTxt(errEl).slice(0, 200));
+        const msgTxt = acctTxt(rdoc.querySelector('#message .inner, #message'));
+        const { doc } = await acctFetch(SITE_ROOT + 'ucp.php?' + d.mod.q, { cache: 'no-store' });
+        const form2 = [...doc.querySelectorAll('form')].find(f => /ucp\.php/i.test(f.getAttribute('action') || '') && f.querySelector('dl input, dl select, dl textarea'));
+        if (!form2) throw new Error('impossibile rileggere la pagina per verificare');
+        const now = acctFdMap(new FormData(document.importNode(form2, true)));
+        const bad = [];
+        let checked = 0;
+        sent.forEach((vals, name) => {
+            if (UF_IGNORE.test(name)) return;
+            checked++;
+            const a = vals.slice().sort().join('\u0001'), b = (now.get(name) || []).slice().sort().join('\u0001');
+            if (a !== b) { const el = d.formEl.querySelector('[name="' + name.replace(/"/g, '\\"') + '"]'); const lb = el && el.closest('dl') && acctTxt(el.closest('dl').querySelector('dt label')); bad.push(lb || name); }
+        });
+        if (!bad.length) acct.saveMsg = { k: 'ok', t: `\u2705 Salvato e verificato sul sito (${checked} campi riletti${msgTxt ? ' \u00b7 ' + msgTxt.slice(0, 80) : ''})` };
+        else acct.saveMsg = { k: 'warn', t: `\u26a0\ufe0f Il sito ha risposto ma questi valori non risultano cambiati: ${bad.slice(0, 6).join(', ')}. Controlla sul sito.` };
+        acct.saving = false;
+        await acctLoadPage(d.mod, true);
+        acctPaintMsg();
+        return;
+    } catch (e) {
+        acct.saveMsg = { k: 'err', t: '\u274c Non salvato: ' + ((e && e.message) || 'errore') };
+    }
+    acct.saving = false; acctPaintMsg();
+}
+
+function acctOpenTopic(key, url, text) {
+    const it = projMakeItem({ key: String(key), url: url || (SITE_ROOT + 'viewtopic.php?t=' + key), text: text || '' }, 0);
+    openDetailModal(it);
+}
+function closeAccount() {
+    const p = acct.prev;
+    if (!p) { setView('home'); return; }
+    if (p.key === 'section' && p.section) { PG.want = p.page || 1; setView('section', p.section); return; }
+    if (['home', 'films', 'series'].includes(p.key)) { PG.want = p.page || 1; setView(p.key); return; }
+    setView(['favs', 'releasers'].includes(p.key) ? p.key : 'home');
+}
+function openAccount(tab) {
+    hideModal();
+    if (!currentUser) { toast('Accedi al forum per usare questa sezione', 'warn'); window.open(SITE_ROOT + 'ucp.php?mode=login', '_blank'); return; }
+    if (view.key !== 'account') acct.prev = { key: view.key, section: view.section, page: PG.page };
+    acct.tab = tab || 'profile';
+    setView('account');
+    acctLoad();
+}
+
+function acctProfileHtml() {
+    const u = currentUser || {};
+    if (acct.pLoading && !acct.profile) return '<p class="seer-status-msg">\u23f3 Lettura del profilo dal sito\u2026</p>';
+    if (acct.pErr && !acct.profile) return `<p class="seer-status-msg">\u26a0\ufe0f Impossibile leggere il profilo (${esc(acct.pErr)}).<br><br><button class="seer-load-btn" data-ac="retry">\ud83d\udd04 Riprova</button></p>`;
+    const P = acct.profile;
+    if (!P) return '';
+    const av = P.avatar || u.avatar;
+    const st = dlStats();
+    const profUrl = SITE_ROOT + 'memberlist.php?mode=viewprofile&u=' + encodeURIComponent(P.uid);
+    return `<div class="seer-ac-card"><div class="seer-ac-hero">` +
+        (av ? `<img src="${esc(av)}" alt="" referrerpolicy="no-referrer">` : '<div class="seer-ac-av">\ud83d\ude42</div>') +
+        `<div><div class="seer-ac-name">${esc(P.name)}</div><div class="seer-ac-sub">${P.rank ? esc(P.rank) + ' \u00b7 ' : ''}ID utente ${esc(P.uid)}</div>` +
+        `<div class="seer-pj-row"><a class="seer-chip" href="${esc(profUrl)}" target="_blank" rel="noopener">\ud83d\udd17 Profilo sul sito</a>` +
+        P.actions.slice(0, 3).map(a => `<a class="seer-chip" href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.text)}</a>`).join('') + `</div></div></div></div>` +
+        `<div class="seer-ac-grid">` +
+        (P.sections.length ? P.sections.map(s => `<div class="seer-ac-card"><h3>${esc(s.title)}</h3>${s.rows.map(r => `<div class="seer-ac-row"><b>${esc(r.l)}</b><span>${r.h ? `<a href="${esc(r.h)}" target="_blank" rel="noopener">${esc(r.v)}</a>` : esc(r.v)}</span></div>`).join('')}</div>`).join('')
+            : '<div class="seer-ac-card"><p class="seer-ac-note">Il sito non ha esposto altri campi pubblici in questa pagina.</p></div>') +
+        `<div class="seer-ac-card"><h3>\ud83d\udd2e In MirSeer</h3>` +
+        `<div class="seer-ac-row"><b>Release segnate come scaricate</b><span>${seenSet.size}</span></div>` +
+        `<div class="seer-ac-row"><b>In watchlist</b><span>${Object.keys(favs).length}</span></div>` +
+        `<div class="seer-ac-row"><b>Releaser/titoli seguiti</b><span>${Object.keys(follows.rel).length + Object.keys(follows.title).length}</span></div>` +
+        `<div class="seer-ac-row"><b>Magnet tracciati</b><span>${st.n}</span></div></div></div>`;
+}
+
+function acctPaneHtml() {
+    const mod = acctMods().find(m => m.k === acct.page) || acctMods()[0];
+    const siteUrl = SITE_ROOT + 'ucp.php?' + mod.q;
+    const head = `<h3>${esc(mod.l)} <a class="seer-chip" style="margin-left:8px;font-weight:600" href="${esc(siteUrl)}" target="_blank" rel="noopener">\ud83d\udd17 Apri sul sito</a></h3>`;
+    if (acct.pageLoading) return head + '<p class="seer-ac-note">\u23f3 Lettura dal sito\u2026</p>';
+    if (acct.pageErr) return head + `<p class="seer-ac-note">\u26a0\ufe0f ${esc(acct.pageErr)}</p><button class="seer-load-btn" data-ac="mod" data-v="${esc(mod.k)}">\ud83d\udd04 Riprova</button>`;
+    const d = acct.pageData;
+    if (!d) return head;
+    if (d.formEl) {
+        return head + (d.ro ? '<p class="seer-ac-note">Sola lettura: modificare nome utente, email o password richiede la password attuale, quindi va fatto sul sito originale.</p>'
+            : '<p class="seer-ac-note">Le modifiche vengono inviate al sito con la tua sessione attiva e poi riverificate rileggendo la pagina.</p>') +
+            `<div class="seer-uf" id="seer-uf-slot"></div>` +
+            (d.ro ? '' : `<div class="seer-uf-bar"><button class="seer-load-btn" data-ac="save">\ud83d\udcbe Salva sul sito</button><span id="seer-uf-msg"></span></div>`);
+    }
+    if (mod.t === 'list') {
+        return head + (d.topics.length ? `<div class="seer-ac-list">${d.topics.map(t => `<button data-ac="open" data-k="${esc(t.key)}" data-u="${esc(t.url)}" data-t="${esc(t.text)}">${esc(t.text)}</button>`).join('')}</div>` : '<p class="seer-ac-note">Nessun elemento.</p>') +
+            (d.hasPager ? '<p class="seer-ac-note">Ci sono altre pagine: aprile dal sito.</p>' : '');
+    }
+    return head + (d.blocks.length ? d.blocks.map(b => `<div style="margin-bottom:12px">${b.title ? `<div class="seer-ac-navh">${esc(b.title)}</div>` : ''}${b.rows.map(r => `<div class="seer-ac-row"><b>${esc(r.l)}</b><span>${esc(r.v)}</span></div>`).join('')}${b.paras.map(p => `<p class="seer-ac-note">${esc(p)}</p>`).join('')}</div>`).join('')
+        : '<p class="seer-ac-note">Questa sezione non espone dati leggibili qui: aprila sul sito.</p>');
+}
+function acctSettingsHtml() {
+    const mods = acctMods();
+    const groups = [...new Set(mods.map(m => m.g))];
+    const nav = groups.map(g => `<div class="seer-ac-navh">${esc(g)}</div>` + mods.filter(m => m.g === g).map(m => `<button class="seer-facet ${acct.page === m.k ? 'active' : ''}" data-ac="mod" data-v="${esc(m.k)}">${esc(m.l)}</button>`).join('')).join('');
+    return `<div class="seer-ac-split"><div class="seer-ac-nav">${nav}<a class="seer-chip" style="margin-top:10px" href="${esc(SITE_ROOT + 'ucp.php?i=pm&folder=inbox')}" target="_blank" rel="noopener">\u2709\ufe0f Messaggi privati (sito)</a></div><div class="seer-ac-card" id="seer-ac-pane">${acctPaneHtml()}</div></div>`;
+}
+
+const ST_COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#84cc16'];
+function acctStatsHtml() {
+    const S = dlStats();
+    const byBytes = acct.relMetric === 'size';
+    const tot = byBytes ? S.bytes : S.n;
+    const rels = Object.entries(S.rel).sort((a, b) => (byBytes ? b[1].b - a[1].b : b[1].n - a[1].n));
+    const top = rels.slice(0, 6).map(([name, o], i) => ({ name, v: byBytes ? o.b : o.n, o, color: ST_COLORS[i] }));
+    const restV = rels.slice(6).reduce((s, [, o]) => s + (byBytes ? o.b : o.n), 0);
+    if (restV > 0) top.push({ name: 'Altri', v: restV, o: null, color: '#64748b' });
+    let acc = 0;
+    const segs = top.map(p => { p.pct = tot ? p.v / tot * 100 : 0; const a = acc; acc += p.pct; return `${p.color} ${a.toFixed(2)}% ${acc.toFixed(2)}%`; });
+    const pie = tot ? `background:conic-gradient(${segs.join(',')})` : 'background:rgba(127,127,127,.2)';
+    const leader = top[0] && top[0].o ? top[0] : null;
+    const qDefs = [['4k', '4K'], ['1080', '1080p'], ['720', '720p'], ['sd', 'SD'], ['other', 'Altro']];
+    const qMax = Math.max(1, ...qDefs.map(([k]) => S.q[k].n));
+    const now = new Date(), months = [];
+    for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); months.push({ k, label: d.toLocaleDateString('it-IT', { month: 'short' }), b: (S.months[k] || {}).b || 0, n: (S.months[k] || {}).n || 0 }); }
+    const mMax = Math.max(1, ...months.map(m => m.b || m.n));
+    const recent = S.rows.slice().sort((a, b) => (b.last || 0) - (a.last || 0)).slice(0, 12);
+    if (!S.n) return `<div class="seer-ac-card"><h3>\ud83d\udcca La mia attivit\u00e0</h3><p class="seer-ac-note">Nessun download tracciato finora. Ogni volta che copi, apri o invii un magnet da MirSeer (o clicchi un magnet nelle pagine del forum) la release viene registrata qui, solo sul tuo browser. I clic precedenti all'aggiornamento non sono recuperabili.</p></div>`;
+    return `<div class="seer-st-cards">` +
+        `<div class="seer-ac-card"><div class="seer-st-num">${esc(fmtSize(S.bytes) || '0 B')}</div><div class="seer-st-lbl">Spazio totale scaricato</div></div>` +
+        `<div class="seer-ac-card"><div class="seer-st-num">${S.n}</div><div class="seer-st-lbl">Release distinte (${S.clicks} clic)</div></div>` +
+        `<div class="seer-ac-card"><div class="seer-st-num">${leader ? esc(leader.name) : '\u2014'}</div><div class="seer-st-lbl">Releaser preferito${leader ? ' \u00b7 ' + Math.round(leader.pct) + '%' : ''}</div></div>` +
+        `<div class="seer-ac-card"><div class="seer-st-num">${S.n - S.noSize}/${S.n}</div><div class="seer-st-lbl">Release con dimensione nota</div></div></div>` +
+        `<div class="seer-st-two"><div class="seer-ac-card"><h3>\ud83c\udfc6 Releaser preferiti</h3>` +
+        `<div class="seer-ac-tabs"><button class="seer-facet ${byBytes ? '' : 'active'}" data-ac="metric" data-v="count">Per numero</button><button class="seer-facet ${byBytes ? 'active' : ''}" data-ac="metric" data-v="size">Per spazio</button></div>` +
+        `<div class="seer-pie-wrap"><div class="seer-pie" style="${pie}"><div class="seer-pie-c">${leader ? Math.round(leader.pct) + '%' : ''}<small>${leader ? esc(leader.name) : ''}</small></div></div>` +
+        `<div class="seer-leg">${top.map(p => `<${p.o ? 'button data-ac="rel" data-v="' + esc(p.name) + '"' : 'div'}><i style="background:${p.color}"></i><b>${esc(p.name)}</b><em>${Math.round(p.pct)}% \u00b7 ${p.o ? p.o.n + ' \u00b7 ' + esc(fmtSize(p.o.b) || '?') : esc(byBytes ? (fmtSize(p.v) || '?') : String(p.v))}</em></${p.o ? 'button' : 'div'}>`).join('')}</div></div></div>` +
+        `<div class="seer-ac-card"><h3>\ud83c\udf9e\ufe0f Distribuzione qualit\u00e0</h3>${qDefs.map(([k, l]) => `<div class="seer-qrow"><b>${l}</b><div class="seer-bar"><i style="width:${(S.q[k].n / qMax * 100).toFixed(1)}%"></i></div><em>${S.q[k].n} \u00b7 ${S.n ? Math.round(S.q[k].n / S.n * 100) : 0}% \u00b7 ${esc(fmtSize(S.q[k].b) || '\u2014')}</em></div>`).join('')}` +
+        `<h3 style="margin-top:14px">\ud83d\udcc5 Ultimi 6 mesi</h3><div class="seer-months">${months.map(m => `<div><span>${m.b ? esc(fmtSize(m.b)) : m.n}</span><i style="height:${((m.b || m.n) / mMax * 90).toFixed(0)}px"></i><span>${esc(m.label)}</span></div>`).join('')}</div></div></div>` +
+        `<div class="seer-ac-card"><h3>\ud83d\udd53 Ultimi download</h3><div class="seer-ac-list">${recent.map(r => `<button data-ac="open" data-k="${esc(r.id)}" data-u="${esc(r.u)}" data-t="${esc(r.t)}">${esc(r.t || '(senza titolo)')} <small style="opacity:.6">\u00b7 ${esc(r.r || '\u2014')} \u00b7 ${esc(fmtSize(r.b) || '?')}</small></button>`).join('')}</div>` +
+        `<div class="seer-uf-bar"><button class="seer-facet" data-ac="export">\u2b07\ufe0f Esporta JSON</button><button class="seer-facet" data-ac="clear">\ud83d\uddd1\ufe0f Azzera statistiche</button></div>` +
+        `<p class="seer-ac-note">Dati salvati solo nel tuo browser. Una release conta una volta anche se clicchi pi\u00f9 volte lo stesso magnet. Le dimensioni vengono dal magnet (parametro xl) o dalla scheda; se mancano, la release conta nei numeri ma non negli spazi.</p></div>`;
+}
+
+function renderAccountPage() {
+    if (view.key !== 'account') return;
+    const box = $('seer-main-list');
+    box.classList.remove('seer-grid');
+    lastDisplayed = [];
+    const cnt = $('seer-count'); if (cnt) cnt.innerText = '';
+    const tabs = [['profile', '\ud83d\udc64 Il mio profilo'], ['settings', '\u2699\ufe0f Impostazioni utente'], ['stats', '\ud83d\udcca La mia attivit\u00e0']];
+    const body = acct.tab === 'profile' ? acctProfileHtml() : acct.tab === 'settings' ? acctSettingsHtml() : acctStatsHtml();
+    const keep = acct.tab === 'settings' && acct.pageData && acct.pageData.formEl;
+    if (keep && keep.parentNode) keep.parentNode.removeChild(keep);
+    box.innerHTML = `<div class="seer-ac-tabs"><button class="seer-facet" data-ac="back">\u2190 Indietro</button>${tabs.map(([k, l]) => `<button class="seer-facet ${acct.tab === k ? 'active' : ''}" data-ac="tab" data-v="${k}">${l}</button>`).join('')}</div>${body}`;
+    if (keep) { const slot = $('seer-uf-slot'); if (slot) slot.appendChild(keep); acctPaintMsg(); }
+}
+
+function acctClick(e) {
+    const b = e.target.closest('[data-ac]');
+    if (!b || view.key !== 'account') return;
+    e.preventDefault();
+    const a = b.dataset.ac, v = b.dataset.v;
+    if (a === 'back') closeAccount();
+    else if (a === 'tab') { acct.tab = v; renderAccountPage(); acctLoad(); }
+    else if (a === 'mod') { const m = acctMods().find(x => x.k === v); if (m) acctLoadPage(m); }
+    else if (a === 'save') acctSave();
+    else if (a === 'retry') acctLoad(true);
+    else if (a === 'metric') { acct.relMetric = v; renderAccountPage(); }
+    else if (a === 'rel') openReleaser(v, null, null);
+    else if (a === 'open') acctOpenTopic(b.dataset.k, b.dataset.u, b.dataset.t);
+    else if (a === 'export') dlExport();
+    else if (a === 'clear') { if (confirm('Azzerare tutte le statistiche di download di MirSeer? L\'operazione non \u00e8 annullabile.')) { dlLog = {}; saveDlNow(); renderAccountPage(); } }
+}
+
+function acctInit() {
+    $('seer-main-list').addEventListener('click', acctClick);
+    $('seer-user-menu').addEventListener('click', e => {
+        const a = e.target.closest('[data-acc]');
+        if (!a) return;
+        e.preventDefault();
+        $('seer-user-menu').classList.remove('open');
+        openAccount(a.dataset.acc);
+    });
+    document.addEventListener('click', e => {
+        const a = e.target && e.target.closest ? e.target.closest('a[href^="magnet:"]') : null;
+        if (!a || a.dataset.seerTracked || a.closest('#mirseer-app')) return;
+        trackDl(forumPageItem(), [a.getAttribute('href')], 'forum');
+    }, true);
+}
+
 
 function init() {
     if ($('mirseer-fab')) return;
@@ -5714,8 +7427,9 @@ function init() {
                 <div class="seer-wl-panel" id="seer-wl-panel"></div>
                 <div id="seer-search-hint"></div>
                 <div class="seer-facets" id="seer-facets"></div>
-                <div class="seer-facets" id="seer-genres"></div>
+
                 <div class="seer-adv" id="seer-adv">
+                    <div class="seer-adv-genres" id="seer-genres"></div>
                     <div class="seer-adv-item" id="seer-adv-vote-wrap">
                         <span>⭐ Valutazione TMDb</span>
                         <input type="range" id="seer-adv-vote" min="0" max="9" step="0.5" value="0" />
@@ -5749,9 +7463,12 @@ function init() {
                     </div>
                     <span class="seer-adv-note" id="seer-adv-note"></span>
                 </div>
+                <div class="seer-proj-head" id="seer-proj-head"></div>
+                <div class="seer-pager" id="seer-pager-top"></div>
                 <div class="seer-list seer-main-list" id="seer-main-list"></div>
-                <div style="text-align:center; margin:35px 0 25px 0;">
-                    <button id="seer-load-more-btn" class="seer-load-btn">📥 Carica Altre Uscite</button>
+                <div class="seer-pager" id="seer-pager"></div>
+                <div style="margin:0;">
+                    <button id="seer-load-more-btn" class="seer-load-btn" style="display:none;">📥 Carica Altre Uscite</button>
                 </div>
             </main>
         </div>
@@ -6005,7 +7722,6 @@ function init() {
         saveTheme(theme);
     };
 
-    // --- Impostazioni: TMDb API Key ---
     const sOverlay = $('seer-settings-overlay');
     const sInput = $('seer-settings-key');
     const sStatus = $('seer-settings-status');
@@ -6053,7 +7769,6 @@ function init() {
     };
     $('seer-settings-clear').onclick = () => { sInput.value = ''; sSave.click(); };
 
-    // --- Impostazioni: preferenze, avvio, magnet, client torrent, cache ---
     const sHero = $('seer-pref-hero');
     const sHeroSpeed = $('seer-pref-hero-speed');
     const sStart = $('seer-pref-start');
@@ -6178,7 +7893,6 @@ function init() {
         sTcTest.disabled = tcClient() === 'off';
     };
 
-    // --- Backup: esporta / importa configurazione (JSON) ---
     const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'follows', 'accent', 'accent2', 'density'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
@@ -6321,6 +8035,8 @@ function init() {
     app.addEventListener('load', e => {
         const img = e.target;
         if (!(img instanceof HTMLImageElement) || !img.dataset.seerId || img.dataset.seerRole !== 'poster') return;
+        const itLoad = registry.get(String(img.dataset.seerId));
+        if (itLoad && isProjLike(itLoad)) { itLoad._imgRetry = 0; return; }
         if (junkDims(img.naturalWidth, img.naturalHeight)) onImageProblem(img);
     }, true);
 
@@ -6383,7 +8099,6 @@ function init() {
     hero.addEventListener('focusout', e => { if (!hero.contains(e.relatedTarget)) resumeHero(); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) stopHero(); else updateHeroVisibility(); });
 
-    // --- Modale dettaglio ---
     const overlay = $('seer-modal-overlay');
     const closeModal = hideModal;
     $('seer-modal-close-btn').onclick = closeModal;
@@ -6403,7 +8118,6 @@ function init() {
         else if (b.dataset.act === 'ext') { const m = $('seer-ext-menu'); if (m) m.classList.toggle('open'); }
     };
 
-    // Badge releaser -> vista autore
     $('seer-modal-metarow').onclick = e => {
         if (currentModalItem && e.target.closest('[data-act="followrel"]')) { toggleFollowRel(currentModalItem.author, currentModalItem.authorId, currentModalItem.authorAvatar); return; }
         const b = e.target.closest('[data-act="releaser"]');
@@ -6412,7 +8126,6 @@ function init() {
         openReleaser(it.author, it.authorId, it.authorAvatar);
     };
 
-    // Selettore versioni: scambia MediaInfo, specifiche e magnet
     $('seer-version-bar').onclick = e => {
         const b = e.target.closest('[data-vid]');
         if (!b) return;
@@ -6420,7 +8133,6 @@ function init() {
         if (v && v !== currentModalItem) openDetailModal(v, true);
     };
 
-    // Sinossi: Mostra altro / Mostra meno
     $('seer-syn-toggle').onclick = () => {
         const ov = $('seer-modal-overview'), tg = $('seer-syn-toggle');
         const open = ov.dataset.open !== '1';
@@ -6429,18 +8141,17 @@ function init() {
         tg.textContent = open ? 'Mostra meno' : 'Mostra altro';
     };
 
-    // --- Pannello releaser ---
     $('seer-rel-panel').onclick = e => {
         if (e.target.closest('[data-rel="follow"]') && rel) { toggleFollowRel(rel.name, rel.id, rel.avatar); return; }
         const c = e.target.closest('[data-rcat]');
         if (c && rel) { rel.cat = c.dataset.rcat; renderDeck(localFilterValue()); return; }
         if (e.target.closest('[data-rel="back"]')) {
             const p = (rel && rel.prev) || { key: 'home', section: null };
+            PG.want = p.page || 0;
             setView(p.key, p.section);
         }
     };
 
-    // --- Trailer ---
     $('seer-trailer-close').onclick = closeTrailer;
     $('seer-trailer-overlay').onclick = e => { if (e.target === $('seer-trailer-overlay')) closeTrailer(); };
 
@@ -6455,11 +8166,11 @@ function init() {
         const mags = currentModalItem ? (currentModalItem.magnets || []) : [];
         if (mags.length) {
             if (settings.magnetAction === 'open') {
-                openMagnet(mags[0].uri);
+                openMagnet(mags[0].uri); trackDl(currentModalItem, [mags[0].uri], 'open');
                 flash(copyBtn, `<span>✅</span> Magnet inviato al client!`, magnetBtnLabel(), 'copied');
                 toast('🧲 Magnet inviato al client torrent', 'ok');
             } else {
-                copyToClipboard(mags[0].uri);
+                copyToClipboard(mags[0].uri); trackDl(currentModalItem, [mags[0].uri], 'copy');
                 flash(copyBtn, `<span>✅</span> Magnet Copiato negli Appunti!`, magnetBtnLabel(), 'copied');
                 toast('📋 Magnet copiato negli appunti', 'ok');
             }
@@ -6506,11 +8217,11 @@ function init() {
         const m = mags[parseInt(b.dataset.mi, 10)];
         if (!m) return;
         if (settings.magnetAction === 'open') {
-            openMagnet(m.uri);
+            openMagnet(m.uri); trackDl(currentModalItem, [m.uri], 'open');
             flash(b, '✅ Inviato', magnetItemLabel(), 'copied');
             toast('🧲 Magnet inviato al client torrent', 'ok');
         } else {
-            copyToClipboard(m.uri);
+            copyToClipboard(m.uri); trackDl(currentModalItem, [m.uri], 'copy');
             flash(b, '✅ Copiato', magnetItemLabel(), 'copied');
             toast('📋 Magnet copiato negli appunti', 'ok');
         }
@@ -6531,11 +8242,11 @@ function init() {
 
     $('seer-sort-select').onchange = e => {
         sortMode = SORT_MODES.includes(e.target.value) ? e.target.value : 'recent';
+        pgOnSortChange();
         setPref('sortMode', sortMode);
         renderDeck(localFilterValue());
     };
 
-    // --- Vista lista / griglia ---
     $('seer-view-toggle').onclick = e => {
         const b = e.target.closest('button[data-view]');
         if (!b) return;
@@ -6546,13 +8257,13 @@ function init() {
         renderDeck(localFilterValue());
     };
 
-    // --- Filtri rapidi ---
     $('seer-facets').onclick = e => {
         const b = e.target.closest('.seer-facet');
         if (!b) return;
-        const f = b.dataset.facet, t = b.dataset.ftype, fm = b.dataset.fmt;
+        const f = b.dataset.facet, t = b.dataset.ftype, fm = b.dataset.fmt, rs = b.dataset.res;
         if (f === 'adv') { advOpen = !advOpen; renderFacets(); updateAdv(); return; }
-        if (t) filters.type = filters.type === t ? 'all' : t;
+        if (rs) filters.res = filters.res === rs ? 'all' : rs;
+        else if (t) filters.type = filters.type === t ? 'all' : t;
         else if (fm) filters.fmt = filters.fmt === fm ? 'all' : fm;
         else if (f === 'reset') {
             gx = newGx();
@@ -6563,7 +8274,6 @@ function init() {
         renderDeck(localFilterValue());
     };
 
-    // --- Filtri avanzati (valutazione, anno, releaser, codec) ---
     const rerenderSoon = (() => {
         let t = null;
         return () => { clearTimeout(t); t = setTimeout(() => renderDeck(localFilterValue()), 160); };
@@ -6593,7 +8303,7 @@ function init() {
         if (!search.active) searchInput._t = setTimeout(() => {
             const cur = searchInput.value.trim();
             if (!search.active && cur.length >= 3) renderDeck(cur);
-        }, 120);          // subito: ricerca fuzzy locale tollerante ai refusi
+        }, 120);
         searchTimer = setTimeout(() => runSearch(q), 700);
     };
 
@@ -6617,7 +8327,6 @@ function init() {
         searchNow();
     };
 
-    // --- Scorciatoie da tastiera ---
     const focusSearch = () => { searchInput.focus(); searchInput.select(); };
     document.addEventListener('keydown', e => {
         if (app.style.display !== 'block') return;
@@ -6682,12 +8391,15 @@ function init() {
         }
     });
 
-    // ===== v1.4 wiring =====
     applyAppearance();
     currentUser = detectUser(document); paintUser();
 
     $('seer-user-btn').onclick = e => { e.stopPropagation(); $('seer-user-menu').classList.toggle('open'); };
     document.addEventListener('click', e => { if (!e.target.closest('.seer-user')) $('seer-user-menu').classList.remove('open'); });
+    $('seer-proj-head').addEventListener('click', projHeadClick);
+    $('mirseer-app').addEventListener('scroll', pjFabUpdate, { passive: true });
+    $('seer-main-list').addEventListener('click', projHeadClick);
+    acctInit();
 
     $('seer-wl-panel').onclick = e => {
         const d = e.target.closest('[data-wl-del]');
@@ -6754,7 +8466,6 @@ function init() {
 
     $('seer-main-list').addEventListener('click', relPageClick);
 
-    // --- Ricerca nella pagina del releaser: digita = filtra caricate, Invio = cerca tra tutte ---
     {
         const ri = $('seer-rel-q');
         let rt = null;
@@ -6762,9 +8473,9 @@ function init() {
             if (!rel) return;
             rel.q = ri.value;
             const had = !!rel.sq;
-            rel.sq = null;                         // digitando si torna al filtro locale
+            rel.sq = null;
             clearTimeout(rt);
-            rt = setTimeout(() => renderDeck(localFilterValue(), true), had ? 0 : 120);
+            rt = setTimeout(() => { if (had) loadPage(1); else renderDeck(localFilterValue(), true); }, had ? 0 : 120);
         });
         ri.addEventListener('keydown', e => {
             if (e.key === 'Enter') { e.preventDefault(); clearTimeout(rt); relRunSearch(); }
@@ -6772,7 +8483,7 @@ function init() {
                 e.preventDefault(); e.stopPropagation();
                 clearTimeout(rt);
                 ri.value = '';
-                if (rel) { rel.q = ''; rel.sq = null; }
+                if (rel) { const had = !!rel.sq; rel.q = ''; rel.sq = null; if (had) { loadPage(1); return; } }
                 renderDeck(localFilterValue(), true);
             }
         });
@@ -6803,7 +8514,8 @@ function init() {
     mobileEnhance();
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-else init();
+const boot = () => { init(); setupPaging(); };
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
 
 })();
