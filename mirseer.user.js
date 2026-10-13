@@ -27,7 +27,7 @@ const HERO_MAX_TOTAL = 100;
 
 const PAGE_SIZE = 25;
 const INITIAL_PAGES = IS_COARSE ? 2 : 3;
-const NET_GAP = 350;
+const NET_GAP = 0;
 const AUTO_MIN = 12;
 const AUTO_PAGES_MAX = 6;
 const IMG_HI_COUNT = 8;
@@ -1007,7 +1007,7 @@ const SIDE_HIDE_RE = /\b(richiest|regolament|segnalaz|comunicat|annunc|off[\s._-
 const MAIN_SUB_EXCLUDE_RE = /\b(richiest|regolament|music|audio|concert|ebook|software|gioch|edic|archivi|cestin|segnalaz|guid|tutorial|faq|comunicat|off[\s._-]*topic|presentaz|discussi)\b/i;
 
 const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const SITE_ROOT = location.origin + '/';
 const fixUrl = u => String(u || '').replace(/^(https?:\/\/[^\/]+)\/releasers\/(?=(?:viewtopic|viewforum|search|memberlist|ucp|download)\b)/i, '$1/');
 const absHref = a => { try { return fixUrl(new URL(a.getAttribute('href'), SITE_ROOT).href); } catch (e) { return fixUrl(a.href || ''); } };
@@ -2757,12 +2757,16 @@ function pump() {
         const j = jobQueue[i];
         if (j.el && !j.el.isConnected) { jobQueue.splice(i, 1); inflight.delete(j.key); j.resolve(CANCELLED); }
     }
-    jobQueue.forEach(j => { j._s = jobScore(j); });
-    jobQueue.sort((a, b) => a._s - b._s);
+    if (jobQueue.length > MAX_CONCURRENT - activeJobs) {
+        jobQueue.forEach(j => { j._s = jobScore(j); });
+        jobQueue.sort((a, b) => a._s - b._s);
+    }
     while (activeJobs < MAX_CONCURRENT && jobQueue.length) {
         const job = jobQueue.shift();
         activeJobs++;
-        job.task().then(job.resolve, job.reject).finally(() => { activeJobs--; pump(); });
+        let run;
+        try { run = Promise.resolve(job.task()); } catch (e) { run = Promise.reject(e); }
+        run.then(job.resolve, job.reject).finally(() => { activeJobs--; pump(); });
     }
 }
 
@@ -3473,9 +3477,10 @@ function scrapeTopicData(item, el = null, low = false) {
     }
 
     if (inflight.has(item.id)) {
-        if (!low) {
-            const queued = jobQueue.find(j => j.key === item.id);
-            if (queued) { queued.low = false; if (!el) queued.el = null; }
+        const queued = jobQueue.find(j => j.key === item.id);
+        if (queued) {
+            if (!low) { queued.low = false; if (!el) queued.el = null; }
+            if (el && queued.el && !queued.el.isConnected) queued.el = el;
         }
         return inflight.get(item.id);
     }
@@ -3578,7 +3583,7 @@ function onRowsVisible(entries, observer) {
 
         scrapeTopicData(item, row).then(data => {
             if (!data) {
-                if (isProjLike(item) && !item.posterTried && row.isConnected && (row._pjReobs = (row._pjReobs || 0) + 1) <= 3) {
+                if (!item.posterTried && row.isConnected && (row._pjReobs = (row._pjReobs || 0) + 1) <= 3) {
                     pjLog(item.id, 'riosservo la riga dopo CANCELLED, giro', row._pjReobs);
                     setTimeout(() => { if (row.isConnected && !item.posterTried) posterObserver.observe(row); }, 500 * row._pjReobs);
                 }
@@ -4583,8 +4588,9 @@ function lev(a, b, max) {
 const fuzzyHay = it => it._hay || (it._hay = normT(it.cleanTitle + ' ' + (it.origTitle || '') + ' ' + it.rawTitle));
 const fuzzyWords = it => it._words || (it._words = [...new Set(fuzzyHay(it).split(' '))].filter(w => w.length > 2));
 
+const fuzzyTokens = q => normT(q).split(' ').filter(Boolean);
 function fuzzyScore(it, q) {
-    const tokens = normT(q).split(' ').filter(Boolean);
+    const tokens = Array.isArray(q) ? q : fuzzyTokens(q);
     if (!tokens.length) return 1;
     const hay = fuzzyHay(it);
     let total = 0;
@@ -4612,8 +4618,9 @@ const inScope = (it, sc) => {
     return it.type === sc.label;
 };
 function fuzzyPool(query, sc) {
+    const tk = fuzzyTokens(query);
     return [...registry.values()]
-        .map(it => [it, inScope(it, sc) ? fuzzyScore(it, query) : 0])
+        .map(it => [it, inScope(it, sc) ? fuzzyScore(it, tk) : 0])
         .filter(x => x[1] > 0)
         .sort((a, b) => b[1] - a[1])
         .map(x => x[0]);
@@ -4672,7 +4679,12 @@ const isCompleteRelease = it =>
     !!(it.meta.season && (it.meta.season.kind === 'complete' || /Complet/i.test(it.meta.season.label))) ||
     /\b(complet[ae]|integrale|full[\s._-]*series)\b/i.test(it.rawTitle);
 
-const fmtHaystack = it => [it.rawTitle, it.mediaInfo || '', ...(it.magnets || []).map(m => m.dn || '')].join(' ');
+const fmtHaystack = it => {
+    const mi = it.mediaInfo || '', mg = it.magnets || [];
+    const key = mi.length + ':' + mg.length;
+    if (it._fmtK !== key) { it._fmtK = key; it._fmtH = [it.rawTitle, mi, ...mg.map(m => m.dn || '')].join(' '); }
+    return it._fmtH;
+};
 
 function makeFilter() {
     if (!anyFilter()) return null;
@@ -5326,7 +5338,7 @@ function renderDeck(filterQuery = '', noAuto = false) {
 
     let displayed = getVisibleItems();
     updateChrome();
-    if (filterQuery && !search.active) displayed = displayed.filter(item => fuzzyScore(item, filterQuery) > 0);
+    if (filterQuery && !search.active) { const fq = fuzzyTokens(filterQuery); displayed = displayed.filter(item => fuzzyScore(item, fq) > 0); }
 
     $('seer-count').innerText = search.active
         ? `${displayed.length} risultati per "${search.query}"${pgSuffix()}`
@@ -7063,6 +7075,7 @@ function pjFabUpdate() {
         b.addEventListener('click', () => closeProject());
         app.appendChild(b);
     }
+    if (view.key !== 'project' && !b.classList.contains('show')) return;
     let show = false;
     if (view.key === 'project' && proj && !search.active) {
         const head = $('seer-proj-head');
@@ -7474,10 +7487,12 @@ function dlStats() {
 }
 function dlExport() {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(dlLog, null, 2)], { type: 'application/json' }));
+    const blobUrl = URL.createObjectURL(new Blob([JSON.stringify(dlLog, null, 2)], { type: 'application/json' }));
+    a.href = blobUrl;
     a.download = 'mirseer-attivita.json';
     a.dataset.seerTracked = '1';
     document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }, 4000);
 }
 
 const acct = { tab: 'profile', prev: null, uid: null, profile: null, pLoading: false, pErr: '', extra: [], page: 'front', pageData: null, pageLoading: false, pageErr: '', saving: false, saveMsg: null, relMetric: 'count' };
