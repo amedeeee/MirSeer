@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.2
+// @version      1.4.4
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -513,6 +513,7 @@ GM_addStyle(`
 .seer-adv-item b { color: #fff; min-width: 32px; display: inline-block; }
 .seer-adv input[type=range] { width: 150px; accent-color: var(--seer-accent); cursor: pointer; }
 .seer-adv-input {
+    color-scheme: dark;
     width: 84px; padding: 6px 9px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--seer-border);
     color: #fff; font-size: 12.5px; outline: none; font-family: inherit;
 }
@@ -1875,10 +1876,25 @@ function extractMediaInfoDom(root) {
 
 const sectionKindOf = type => VIDEO_TYPES.has(type) ? 'video' : AUDIO_TYPES.has(type) ? 'audio' : FILE_TYPES.has(type) ? 'file' : null;
 
+function kindBySection(type, kind) {
+    if (!kind) return kind;
+    const sk = sectionKindOf(type);
+    if (sk === 'video' && kind === 'audio') return 'video';
+    if (sk === 'audio' && (kind === 'text' || kind === 'file')) return 'audio';
+    if (sk === 'file' && kind !== 'file') return 'file';
+    return kind;
+}
 function effKind(item) {
-    const sk = sectionKindOf(item.type);
-    if (sk === 'video' && item.kind === 'audio') return 'video';
-    return item.kind;
+    if (item.unavailable) return item.kind;
+    return kindBySection(item.type, item.kind);
+}
+function syncSectionType(item, type) {
+    if (!item || !type || type === 'auto' || item.type === type || item._typeFixed) return;
+    if (type === PROJECT_SECTION || item.type === PROJECT_SECTION || type === 'Film' || type === 'Serie TV') return;
+    if (!sectionKindOf(type)) return;
+    item.type = type;
+    item._hay = null;
+    item.kind = kindBySection(type, item.kind);
 }
 
 function detectKind(root, text, magnets, item, hasThanks) {
@@ -2067,6 +2083,7 @@ async function parseTopicsFromDoc(doc, defaultType, relaxed = false, fallbackTyp
             item.author = item.author || author;
             item.authorId = item.authorId || authorId;
             if (auto && forumId) { item.forumId = forumId; item.forumName = forumName; }
+            if (!auto) syncSectionType(item, defaultType);
             order.push({ item });
         } else {
             const rec = { topicId, href, raw, views, replies, ts, lastReplyTs, author, authorId, forumId, forumName };
@@ -2162,9 +2179,10 @@ function toggleFollowRel(name, id, avatar) {
 }
 function toggleFollowTitle(item) {
     const k = titleFollowKey(item);
-    if (follows.title[k]) { delete follows.title[k]; toast('Titolo rimosso dalla watchlist'); }
+    if (follows.title[k]) { delete follows.title[k]; tvSetOff(k, true); toast('Titolo rimosso dalla watchlist'); }
     else {
         follows.title[k] = { key: k, title: item.cleanTitle, type: item.type, lastId: knownMaxId(i => titleFollowKey(i) === k), added: Date.now() };
+        tvSetOff(k, false);
         toast('👁️ Seguo «' + item.cleanTitle + '»', 'ok');
     }
     saveFollows(); afterFollowChange(true);
@@ -2200,7 +2218,8 @@ async function checkFollows(force = false) {
             const fids = sec && sec.fid ? [String(sec.fid)] : [FILM_FORUM_ID, SERIES_FORUM_ID];
             const page = await fetchSearchPage(buildSearchUrl(f.title, fids), { relaxed: !(f.type === 'Film' || f.type === 'Serie TV'), fallbackType: f.type });
             if (page.flood) break;
-            collectNew(f, page.items.filter(it => titleFollowKey(it) === f.key), found);
+            if (tv[f.key] && !tv[f.key].off) await tvCheck(f, page, found, force);
+            else collectNew(f, page.items.filter(it => titleFollowKey(it) === f.key), found);
         }
         wlNew = found;
         saveFollows();
@@ -2212,6 +2231,7 @@ async function checkFollows(force = false) {
     }
 }
 function markAllFollowsSeen() {
+    try { tvIgnoreAll(); } catch (e) {}
     [...Object.values(follows.rel), ...Object.values(follows.title)].forEach(f => { if (f.top) f.lastId = Math.max(f.lastId || 0, f.top); });
     wlNew = new Map(); saveFollows(); updateFavCount(); renderWlPanel();
     if (view.key === 'favs') renderDeck(localFilterValue());
@@ -2226,7 +2246,7 @@ function renderWlPanel() {
     if (!rels.length && !titles.length) { p.innerHTML = '<span class="seer-wl-empty">Segui un releaser o un titolo dalla scheda dettagli (➕ Segui) per vedere qui le nuove uscite.</span>'; return; }
     p.innerHTML =
         rels.map(f => `<span class="seer-wl-chip">👤 ${esc(f.name)}<button data-wl-del="rel" data-k="${esc(relKey(f.name))}" title="Smetti di seguire">✕</button></span>`).join('') +
-        titles.map(f => `<span class="seer-wl-chip">📺 ${esc(f.title)}<button data-wl-del="title" data-k="${esc(f.key)}" title="Smetti di seguire">✕</button></span>`).join('') +
+        titles.map(f => `<span class="seer-wl-chip" title="${esc(tvTip(f.key))}">📺 ${esc(f.title)}${tvChipSfx(f.key)}<button data-wl-del="title" data-k="${esc(f.key)}" title="Smetti di seguire">✕</button></span>`).join('') +
         `<span style="flex:1"></span><button class="seer-facet" data-wl="check">🔄 ${wlChecking ? 'Controllo…' : 'Controlla ora'}</button>` +
         (wlNew.size ? `<button class="seer-facet active" data-wl="seen">✓ Segna tutto come visto (${wlNew.size})</button>` : '');
 }
@@ -2259,13 +2279,12 @@ function paintUser() {
     menu.innerHTML = u
         ? `<div class="seer-user-head">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">` : '<span style="font-size:30px">🙂</span>'}<div><div class="seer-user-name">${esc(u.name)}</div><div class="seer-user-sub">MirCrew</div></div></div>` +
           `<a href="#" data-acc="profile">👤 Il mio profilo</a>` +
-          `<a href="#" data-acc="settings">⚙️ Impostazioni utente</a>` +
           `<a href="#" data-acc="stats">📊 La mia attività</a>`
         : `<a href="/ucp.php?mode=login" target="_blank" rel="noopener">🔑 Accedi al forum</a>`;
 }
 
 async function sendRaw(item, uris) {
-    const client = tcClient(), base = tcBase(), dir = tcPathFor(item);
+    const client = tcClient(), base = tcBase(), dir = tvDirFor(item) || tcPathFor(item);
     if (client === 'qbittorrent') await qbAdd(base, tcUser(), tcPass(), uris, dir);
     else for (const u of uris) await trRpc(base, tcUser(), tcPass(), { method: 'torrent-add', arguments: dir ? { filename: u, 'download-dir': dir } : { filename: u } });
     return dir;
@@ -3271,8 +3290,7 @@ function applyParsed(item, p) {
     if (p.author && !item.author) item.author = p.author;
     item.authorId = p.authorId || item.authorId || null;
     item.authorAvatar = p.authorAvatar || item.authorAvatar || null;
-    item.kind = p.kind || 'video';
-    if (sectionKindOf(item.type) === 'video' && item.kind === 'audio') item.kind = 'video';
+    { const sk0 = sectionKindOf(item.type); item.kind = kindBySection(item.type, p.kind || ((sk0 === 'audio' || sk0 === 'file') ? sk0 : 'video')); }
     item.body = p.body || null;
     item.tmdbTitle = p.tmdbTitle || null;
     item.tmdbYear = p.tmdbYear || null;
@@ -3533,6 +3551,9 @@ function onRowsVisible(entries, observer) {
                 return;
             }
             if (!row.isConnected) return;
+            if (!item.posterTried && !isProjLike(item) && (row._rdRetry = (row._rdRetry || 0) + 1) <= 2) {
+                setTimeout(() => { if (row.isConnected && !item.posterTried) posterObserver.observe(row); }, 2500 * row._rdRetry);
+            }
             genresSoon();
             fillRow(row, item);
         });
@@ -3551,6 +3572,203 @@ const tcUser = () => String(getPref('tcUser', '') || '');
 const tcPass = () => String(getPref('tcPass', '') || '');
 const tcPaths = () => { const p = getPref('tcPaths', {}); return (p && typeof p === 'object' && !Array.isArray(p)) ? p : {}; };
 const tcPathFor = item => (item ? String(tcPaths()[item.type] || '').trim() : '');
+
+let tv = (() => { const t = getPref('tvTrack', {}); return (t && typeof t === 'object' && !Array.isArray(t)) ? t : {}; })();
+const tvSave = () => setPref('tvTrack', tv);
+const tvIsSeries = it => !!it && SEASON_SECTIONS.has(it.type);
+const tvOf = it => (tvIsSeries(it) ? tv[titleFollowKey(it)] || null : null);
+const tvDirFor = it => { const t = tvOf(it); return t ? String(t.dir || '').trim() : ''; };
+const tvNorm = (t, s) => (s != null ? s : ((t && t.lastSeason) || 1));
+const tvPad = v => String(v).padStart(2, '0');
+
+function tvRanges(arr) {
+    const a = [...new Set(arr)].sort((x, y) => x - y), out = [];
+    for (let i = 0; i < a.length;) {
+        let j = i;
+        while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++;
+        out.push(j > i ? a[i] + '-' + a[j] : String(a[i]));
+        i = j + 1;
+    }
+    return out.join(', ');
+}
+function tvSummary(k) {
+    const t = tv[k];
+    if (!t) return '';
+    const parts = Object.keys(t.eps || {}).map(Number).sort((a, b) => a - b).map(s => 'S' + tvPad(s) + ' E' + tvRanges(t.eps[s] || []));
+    Object.keys(t.full || {}).forEach(s => { if (!(t.eps || {})[s] || !t.eps[s].length) parts.push('S' + tvPad(s) + ' completa'); });
+    return parts.join(' · ');
+}
+const tvTip = k => { const t = tv[k]; if (!t) return ''; return [tvSummary(k), t.dir ? 'Cartella: ' + t.dir : ''].filter(Boolean).join('\n'); };
+const tvChipSfx = k => { const s = tvSummary(k); return s ? ' <small style="opacity:.7">' + esc(s.length > 38 ? s.slice(0, 36) + '…' : s) + '</small>' : ''; };
+
+function tvEpsOfMagnet(m) {
+    const out = [];
+    if (!m || m.ep == null) return out;
+    let b = m.ep;
+    const r = /Episodio\s+\d+\s*-\s*(\d+)/i.exec(m.label || '');
+    if (r && +r[1] > b && +r[1] - b < 300) b = +r[1];
+    for (let e = m.ep; e <= b; e++) out.push([m.season != null ? m.season : null, e]);
+    return out;
+}
+function tvEpsFromTitle(it) {
+    const s = it && it.meta && it.meta.season;
+    if (!s) return [];
+    const lm = /Ep\.\s*(\d+)(?:-(\d+))?/.exec(s.label || '');
+    if (lm) {
+        const a = +lm[1], b = lm[2] ? +lm[2] : a, out = [];
+        for (let e = a; e <= Math.min(b, a + 300); e++) out.push([s.season != null ? s.season : null, e]);
+        return out;
+    }
+    const sm = /^S(\d+)E(\d+)$/i.exec(s.short || '');
+    return sm ? [[+sm[1], +sm[2]]] : [];
+}
+
+function tvRecord(it, uris, via) {
+    if (!tvIsSeries(it)) return;
+    const k = titleFollowKey(it);
+    let t = tv[k], fresh = false;
+    if (!t) { t = tv[k] = { key: k, title: it.cleanTitle, type: it.type, eps: {}, full: {}, srcIds: [], ign: [], dir: '', lastSeason: 0, q: '', off: false, added: Date.now() }; fresh = true; }
+    const mags = it.magnets || [];
+    const chosen = (uris && uris.length) ? mags.filter(m => uris.some(u => magnetKey(u) === magnetKey(m.uri))) : mags;
+    let pairs = [];
+    chosen.forEach(m => tvEpsOfMagnet(m).forEach(p => pairs.push(p)));
+    if (!pairs.length) pairs = tvEpsFromTitle(it);
+    if (!pairs.length) {
+        const s = it.meta && it.meta.season;
+        if (s && (s.kind === 'season' || s.kind === 'range') && s.season != null) t.full[s.season] = Date.now();
+    }
+    pairs.filter(p => p[0] != null).forEach(p => { t.lastSeason = Math.max(t.lastSeason || 0, p[0]); });
+    pairs.forEach(([s, e]) => {
+        s = tvNorm(t, s);
+        const a = (t.eps[s] = t.eps[s] || []);
+        if (!a.includes(e)) a.push(e);
+        a.sort((x, y) => x - y);
+    });
+    t.title = it.cleanTitle || t.title;
+    t.q = dlQuality(it) || t.q;
+    t.updated = Date.now();
+    t.srcIds = [String(it.id), ...(t.srcIds || []).filter(x => x !== String(it.id))].slice(0, 12);
+    if (!t.off && !follows.title[k]) {
+        follows.title[k] = { key: k, title: it.cleanTitle, type: it.type, lastId: knownMaxId(i => titleFollowKey(i) === k), added: Date.now() };
+        saveFollows();
+        setTimeout(() => { try { updateFavCount(); renderWlPanel(); } catch (e) {} }, 0);
+        if (fresh) toast('📺 «' + it.cleanTitle + '» aggiunta alla watchlist' + (tvSummary(k) ? ' (' + tvSummary(k) + ')' : ''), 'ok', 3400);
+    }
+    tvSave();
+    try { if (currentModalItem && $('seer-modal-overlay').style.display === 'flex') paintModalTools(currentModalItem); } catch (e) {}
+}
+function tvSetDir(it, dir) {
+    const t = tvOf(it);
+    if (!t) return;
+    t.dir = String(dir || '').trim();
+    tvSave();
+}
+function tvSetOff(k, off) {
+    if (!tv[k]) return;
+    tv[k].off = !!off;
+    tvSave();
+}
+function tvIgnoreAll() {
+    wlNew.forEach(it => {
+        const t = tv[titleFollowKey(it)];
+        if (t && it._tvKeys) t.ign = [...new Set([...(t.ign || []), ...it._tvKeys])];
+    });
+    tvSave();
+}
+function tvNewLabel(it) {
+    const a = it._tvNew || [];
+    return a.length > 3 ? a.slice(0, 3).join(' · ') + ' · +' + (a.length - 3) : a.join(' · ');
+}
+function dlBtnState(item) {
+    const o = dlOverride.trim(), sd = tvDirFor(item);
+    if (o) return { on: true, title: 'Cartella per questo invio: ' + o };
+    if (sd) return { on: true, title: 'Cartella di questa serie: ' + sd };
+    return { on: false, title: 'Scegli la cartella di download per questo invio' };
+}
+
+const tvScrapeCache = new Map();
+const tvBudget = { t: 0, n: 0 };
+async function tvFreshEps(it, force) {
+    const c = tvScrapeCache.get(it.id);
+    if (c && !force && Date.now() - c.t < 1800000) return { pairs: c.pairs, fresh: false };
+    const pairs = [];
+    try {
+        await netGate();
+        const { doc, html } = await fetchTopicPage(it.url, true);
+        findMagnets(doc, html).forEach(m => tvEpsOfMagnet(m).forEach(p => pairs.push(p)));
+    } catch (e) { return { pairs: c ? c.pairs : [], fresh: false }; }
+    tvScrapeCache.set(it.id, { t: Date.now(), pairs });
+    return { pairs, fresh: true };
+}
+
+async function tvCheck(f, page, found, force) {
+    const t = tv[f.key];
+    let items = page.items.slice();
+    if (page.nextUrl) {
+        try {
+            const p2 = await fetchSearchPage(page.nextUrl, { relaxed: !(f.type === 'Film' || f.type === 'Serie TV'), fallbackType: f.type });
+            if (!p2.flood) items = items.concat(p2.items);
+        } catch (e) {}
+    }
+    items = uniqById(items.filter(it => titleFollowKey(it) === f.key));
+    if (Date.now() - tvBudget.t > 120000) { tvBudget.t = Date.now(); tvBudget.n = 0; }
+
+    const cur = t.lastSeason || 1;
+    const have = new Set();
+    Object.keys(t.eps || {}).forEach(s => (t.eps[s] || []).forEach(e => have.add(s + '|' + e)));
+    const ign = new Set(t.ign || []), full = t.full || {};
+    const sorted = items.slice().sort((a, b) =>
+        ((dlQuality(a) === t.q ? 0 : 1) - (dlQuality(b) === t.q ? 0 : 1)) || ((b.numericId || 0) - (a.numericId || 0)));
+    const covered = new Set();
+    for (const it of sorted) {
+        const sk = it.meta && it.meta.season && it.meta.season.kind;
+        const srcTopic = (t.srcIds || []).includes(String(it.id));
+        let pairs = tvEpsFromTitle(it);
+        if ((srcTopic || ((sk === 'season' || sk === 'ep') && !pairs.length)) && tvBudget.n < 10) {
+            const r = await tvFreshEps(it, force);
+            if (r.fresh) tvBudget.n++;
+            pairs = pairs.concat(r.pairs);
+        }
+        const mine = [...new Set(pairs.map(([s, e]) => tvNorm(t, s) + '|' + e))].filter(k2 => {
+            const s = +k2.split('|')[0];
+            return s >= cur && !have.has(k2) && !ign.has(k2) && !full[s];
+        });
+        const fresh = mine.filter(k2 => !covered.has(k2));
+        if (!fresh.length) continue;
+        fresh.forEach(k2 => covered.add(k2));
+        mine.sort((a, b) => { const [sa, ea] = a.split('|').map(Number), [sb, eb] = b.split('|').map(Number); return (sa - sb) || (ea - eb); });
+        it._tvKeys = mine;
+        it._tvNew = mine.map(k2 => { const [s, e] = k2.split('|'); return 'S' + tvPad(s) + 'E' + tvPad(e); });
+        found.set(it.id, it);
+    }
+    f.top = Math.max(f.top || 0, ...items.map(i => i.numericId || 0));
+}
+
+let dlOverride = '';
+const dlRecent = () => { const r = getPref('tcRecentPaths', []); return Array.isArray(r) ? r.filter(x => typeof x === 'string' && x) : []; };
+const dlRemember = p => { try { setPref('tcRecentPaths', [p, ...dlRecent().filter(x => x !== p)].slice(0, 8)); } catch (e) {} };
+function dlSyncBtn() {
+    const b = document.querySelector('#seer-modal-tools [data-act="dlpath"]');
+    if (b) { const ds = dlBtnState(currentModalItem); b.classList.toggle('on', ds.on); b.title = ds.title; }
+}
+function dlReset() {
+    dlOverride = '';
+    const bar = $('seer-dlpath'), inp = $('seer-dlpath-input');
+    if (inp) inp.value = '';
+    if (bar) bar.hidden = true;
+    dlSyncBtn();
+}
+function dlToggleBar() {
+    const bar = $('seer-dlpath'), inp = $('seer-dlpath-input'), dl = $('seer-dlpath-list');
+    if (!bar || !inp) return;
+    bar.hidden = !bar.hidden;
+    if (bar.hidden) return;
+    const sd = tvDirFor(currentModalItem);
+    inp.placeholder = sd ? 'Cartella della serie: ' + sd + ' (vuoto = usa questa)' : 'Cartella di download · vuoto = ' + (tcPathFor(currentModalItem) || 'predefinita del client');
+    const fg = $('seer-dlpath-forget'); if (fg) fg.hidden = !sd;
+    if (dl) dl.innerHTML = dlRecent().map(p => `<option value="${esc(p)}"></option>`).join('');
+    inp.focus();
+}
 
 function gmRequest(opts) {
     return new Promise((resolve, reject) => {
@@ -3621,13 +3839,16 @@ async function trRpc(base, user, pass, body) {
 async function sendToClient(item, uris) {
     const client = tcClient(), base = tcBase();
     if (client === 'off' || !base) { toast('Configura prima il client torrent nelle impostazioni ⚙️', 'warn'); return false; }
-    const dir = tcPathFor(item);
+    const custom = (item && item === currentModalItem) ? dlOverride.trim() : '';
+    const dir = custom || tvDirFor(item) || tcPathFor(item);
     try {
         if (client === 'qbittorrent') await qbAdd(base, tcUser(), tcPass(), uris, dir);
         else for (const u of uris) await trRpc(base, tcUser(), tcPass(), { method: 'torrent-add', arguments: dir ? { filename: u, 'download-dir': dir } : { filename: u } });
         toast(`⬇️ ${uris.length > 1 ? uris.length + ' magnet inviati' : 'Magnet inviato'} a ${tcName()}${dir ? ' → ' + dir : ''}`, 'ok', dir ? 3800 : 2600);
+        if (custom) dlRemember(custom);
         if (item) markSeen(item, true);
         trackDl(item, uris, 'send');
+        if (custom) tvSetDir(item, custom);
         return true;
     } catch (e) {
         toast('❌ Invio fallito: ' + ((e && e.message) || e), 'err', 4500);
@@ -3932,6 +4153,8 @@ function paintModalTools(item) {
     const fav = isFav(item.id), seen = isSeen(item.id);
     let h = `<button class="seer-tool-btn ${fav ? 'on' : ''}" data-act="fav" title="${fav ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${fav ? '★' : '☆'} Watchlist</button>`;
     h += `<button class="seer-tool-btn ${seen ? 'on' : ''}" data-act="seen" title="${seen ? 'Clic per annullare' : 'Segna come scaricato'}">✓ ${seen ? 'Scaricato' : 'Segna come scaricato'}</button>`;
+    if (tcClient() !== 'off') { const ds = dlBtnState(item); h += `<button class="seer-tool-btn ${ds.on ? 'on' : ''}" data-act="dlpath" title="${esc(ds.title)}">📁 Cartella</button>`; }
+    if (tvOf(item) && tvSummary(titleFollowKey(item))) h += `<span class="seer-tvinfo" title="${esc(tvTip(titleFollowKey(item)))}">📺 Scaricati: ${esc(tvSummary(titleFollowKey(item)))}</span>`;
     if (sectionKindOf(item.type) === 'video') { const ft = isFollowingTitle(item); h += `<button class="seer-tool-btn ${ft ? 'on' : ''}" data-act="followtitle">${ft ? '✓ Segui titolo' : '➕ Segui titolo'}</button>`; }
     if (item.trailer) h += `<button class="seer-tool-btn trailer" data-act="trailer">▶ Guarda Trailer</button>`;
     const links = externalLinks(item);
@@ -4198,6 +4421,7 @@ async function unlockMagnet(item) {
 
 function hideModal() {
     modalToken++;
+    dlReset();
     const o = $('seer-modal-overlay');
     if (o) o.style.display = 'none';
 }
@@ -4210,6 +4434,7 @@ async function openDetailModal(item, keepVersions = false) {
     const modalWindow = overlay.querySelector('.seer-detail-window');
     const copyBtn = $('seer-copy-btn');
 
+    if (!keepVersions && currentModalItem !== item) dlReset();
     currentModalItem = item;
     if (!keepVersions) modalVersions = versionsFor(item);
     modalWindow.classList.remove('is-landscape', 'is-portrait');
@@ -4289,6 +4514,7 @@ const byRelease = (x, y) => {
 };
 
 function applySort(items) {
+    if (sortMode === 'recent' && PG.relOrder && isPagedView() && !search.active) return items.slice();
     const a = items.slice();
     switch (sortMode) {
         case 'activity': a.sort((x, y) => ((y.lastReplyTs || y.ts || 0) - (x.lastReplyTs || x.ts || 0)) || ((y.numericId || 0) - (x.numericId || 0))); break;
@@ -4953,10 +5179,20 @@ function updateChrome() {
     updateLoadMore();
 }
 
+const resKeyOf = m => (m.is4k ? '4k' : m.is1080p ? '1080' : m.is720p ? '720' : 'sd');
+const RES_TAG = { '4k': ['tag-4k', '4K UHD'], '1080': ['tag-1080', '1080p'], '720': ['tag-720', '720p'], 'sd': ['tag-sd', 'SD'] };
+function resTagsHtml(item) {
+    const list = (item._vers && item._vers.length > 1) ? item._vers : [item];
+    const keys = new Set(list.map(v => resKeyOf(v.meta || item.meta)));
+    return ['4k', '1080', '720', 'sd'].filter(k => keys.has(k))
+        .map(k => `<span class="seer-tag ${RES_TAG[k][0]}">${RES_TAG[k][1]}</span>`).join('');
+}
+
 function fillRow(row, item) {
     const isProj = item.type === PROJECT_SECTION || item.forumName === PROJECT_SECTION;
     const m = item.meta;
-    const kind = effKind(item);
+    const sk0 = sectionKindOf(item.type);
+    const kind = effKind(item) || ((sk0 === 'audio' || sk0 === 'file') ? sk0 : null);
     const looksVideo = kind === 'video' || (!kind && VIDEO_TYPES.has(item.type));
     const grid = viewMode === 'grid';
     const seen = isSeen(item.id);
@@ -4989,10 +5225,7 @@ function fillRow(row, item) {
         const preview = (item.synopsis || '').replace(/\s+/g, ' ').trim().slice(0, 190);
         specsHtml = preview ? `<span class="seer-preview">${esc(preview)}</span>` : `<span class="seer-preview">Apri per i dettagli e il magnet.</span>`;
     } else if (looksVideo) {
-        if (m.is4k) badgesHtml += `<span class="seer-tag tag-4k">4K UHD</span>`;
-        else if (m.is1080p) badgesHtml += `<span class="seer-tag tag-1080">1080p</span>`;
-        else if (m.is720p) badgesHtml += `<span class="seer-tag tag-720">720p</span>`;
-        else badgesHtml += `<span class="seer-tag tag-sd">SD</span>`;
+        badgesHtml += resTagsHtml(item);
         if (m.isDV) badgesHtml += `<span class="seer-tag tag-dv">DV</span>`;
         else if (m.isHDR) badgesHtml += `<span class="seer-tag tag-hdr">HDR</span>`;
         if (m.season) badgesHtml += `<span class="seer-tag tag-season">📺 ${esc(m.season.short)}</span>`;
@@ -5005,7 +5238,9 @@ function fillRow(row, item) {
         specsHtml = `<span class="seer-preview">Lettura del post…</span>`;
     }
     if (item.sizeBytes && kind !== 'text') specsHtml += `<span class="seer-pill codec">💾 ${esc(fmtSize(item.sizeBytes))}</span>`;
-    if (wlNew.has(String(item.id))) badgesHtml += '<span class="seer-tag tag-new">🆕 Nuovo</span>';
+    if (wlNew.has(String(item.id))) badgesHtml += (item._tvNew && item._tvNew.length)
+        ? `<span class="seer-tag tag-new" title="Episodi non ancora scaricati">🆕 ${esc(tvNewLabel(item))}</span>`
+        : '<span class="seer-tag tag-new">🆕 Nuovo</span>';
     if (item._vers && item._vers.length > 1) badgesHtml += `<span class="seer-tag tag-vers" title="Più versioni disponibili">📚 ${item._vers.length} versioni</span>`;
     if (seen) badgesHtml += `<span class="seer-tag tag-seen">✓ Scaricato</span>`;
 
@@ -5021,7 +5256,7 @@ function fillRow(row, item) {
         row.innerHTML = `
             <div class="seer-poster-wrap">${posterHtml}<div class="seer-card-badges">${badgesHtml}</div>${favBtn}${selBox}</div>
             <div class="seer-info"><span class="seer-title" title="${esc(item.rawTitle)}">${esc(isProj ? item.cleanTitle.replace(/\s+(?:SD|TESTO|RIP|VIDEO)\b/gi, '').trim() : item.displayTitle)}</span></div>
-            <div class="seer-card-meta"><span>${esc(item.type)}${item.year ? ' · ' + esc(item.year) : ''}${item.sizeBytes ? ' · ' + esc(fmtSize(item.sizeBytes)) : ''}</span><span>👁️ ${esc(fmtViews(item.views || 0))}</span></div>
+            <div class="seer-card-meta"><span>${esc(item.type)}${item.year ? ' · ' + esc(item.year) : ''}${item.sizeBytes ? ' · ' + esc(fmtSize(item.sizeBytes)) : ''}</span>${item.views ? `<span>👁️ ${esc(fmtViews(item.views))}</span>` : ''}</div>
         `;
         return;
     }
@@ -5038,7 +5273,7 @@ function fillRow(row, item) {
         <div class="seer-right-meta">
             <span class="seer-type-label" title="${esc(item.type)}">${esc(item.type)}</span>
             ${item.year ? `<span class="seer-year-label">${esc(item.year)}</span>` : ''}
-            <span class="seer-views-label" title="Visite sul forum">👁️ ${esc(fmtViews(item.views || 0))}</span>
+            ${item.views ? `<span class="seer-views-label" title="Visite sul forum">👁️ ${esc(fmtViews(item.views))}</span>` : ''}
         </div>
         ${favBtn}
     `;
@@ -5365,8 +5600,9 @@ async function loadSidebar() {
     renderSidebarSections();
 }
 
+const wildQuery = s => s.trim().split(/\s+/).map(w => (/^[\p{L}][\p{L}\p{N}]{2,}$/u.test(w) ? w + '*' : w)).join(' ');
 function buildSearchUrl(query, fids) {
-    const q = query.trim();
+    const q = wildQuery(query);
     const forumParams = fids.map(id => `&f[]=${id}&fid[]=${id}`).join('');
     return `/search.php?keywords=${encodeURIComponent(q)}&terms=all&author=&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0${forumParams}&submit=Cerca`;
 }
@@ -5453,9 +5689,9 @@ function pgSource() {
     }
     if (view.key === 'home') {
         const hUrl = (fid, s0) => `/viewforum.php?f=${fid}&start=${s0}&sk=${f[0]}&sd=${f[1]}&st=0`;
-        const hPart = (fid, type) => ({ kind: 'forum', id: fid, key: 'f|' + fid + '|' + f.join(''), url: s0 => hUrl(fid, s0), urlFor: hUrl, sub: false, type, relaxed: false, fallbackType: type });
+        const hPart = (fid, type) => { const rl = relWanted(fid); return { kind: 'forum', id: fid, rel: rl, key: 'f|' + fid + '|' + (rl ? 'rel' : f.join('')), url: s0 => hUrl(fid, s0), urlFor: hUrl, sub: false, type, relaxed: false, fallbackType: type }; };
         const parts = [hPart(FILM_FORUM_ID, 'Film'), hPart(SERIES_FORUM_ID, 'Serie TV')];
-        return { kind: 'home', key: 'h|' + f.join(''), parts, url: parts[0].url, type: 'auto', relaxed: false, fallbackType: null };
+        return { kind: 'home', key: 'h|' + parts.map(p => (p.rel ? 'R' : f.join(''))).join('|'), parts, url: parts[0].url, type: 'auto', relaxed: false, fallbackType: null };
     }
     let id, type, relaxed;
     if (view.key === 'films') { id = FILM_FORUM_ID; type = 'Film'; relaxed = false; }
@@ -5464,7 +5700,9 @@ function pgSource() {
     else return null;
     const urlFor = (fid, s0) => `/viewforum.php?f=${fid}&start=${s0}&sk=${f[0]}&sd=${f[1]}&st=0`;
     const secDef = sectionList.find(s => String(s.fid) === String(id));
-    return { kind: 'forum', id, key: 'f|' + id + '|' + f.join(''), url: s0 => urlFor(id, s0), urlFor, sub: !!(secDef && secDef.sub), type, relaxed, fallbackType: type };
+    const isSub = !!(secDef && secDef.sub);
+    const rl = !isSub && relWanted(id);
+    return { kind: 'forum', id, rel: rl, key: 'f|' + id + '|' + (rl ? 'rel' : f.join('')), url: s0 => urlFor(id, s0), urlFor, sub: isSub, type, relaxed, fallbackType: type };
 }
 
 function docPaging(doc, start, fallbackPer) {
@@ -5507,6 +5745,166 @@ async function pgFetchOne(src, page, urlFn) {
     return { items, flood, total: pg.total, per: pg.per, current: pg.current, results, t: Date.now(), doc };
 }
 
+const relTpl = new Map();
+const relBad = new Set();
+const REL_DATE_RE = /(\d{1,2})\/(\d{1,2})\/(\d{4})[,\s]+(\d{1,2}):(\d{2})/;
+const REL_ONLY_DATE_RE = /^\s*\d{1,2}\/\d{1,2}\/\d{4}/;
+
+function relWanted(id) {
+    id = String(id);
+    if (sortMode !== 'recent' || relBad.has(id) || id === '13') return false;
+    const def = sectionList.find(s => String(s.fid) === id);
+    return !(def && def.sub);
+}
+
+function parseReleaseRows(doc) {
+    const idOf = a => {
+        const h = a.getAttribute('href') || '';
+        return (h.match(/[?&]t=(\d+)/) || [])[1] || ('p' + ((h.match(/[?&]p=(\d+)/) || [])[1] || ''));
+    };
+    const links = [...doc.querySelectorAll('a[href*="viewtopic.php"]')].filter(a => {
+        const h = a.getAttribute('href') || '';
+        const txt = (a.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/[?&](?:t|p)=\d+/.test(h) || txt.length < 5 || REL_ONLY_DATE_RE.test(txt)) return false;
+        if (a.closest('.navbar, .breadcrumbs, #nav-breadcrumbs, .pagination')) return false;
+        try { if (inRecentBlock(a)) return false; } catch (e) {}
+        return true;
+    });
+    const out = [], seen = new Set();
+    links.forEach(a => {
+        const topicId = idOf(a);
+        if (seen.has(topicId)) return;
+        seen.add(topicId);
+        let row = a, found = null;
+        for (let d = 0; d < 8 && row.parentElement && row.parentElement !== doc.body; d++) {
+            row = row.parentElement;
+            const ids = new Set(links.filter(l => row.contains(l)).map(idOf));
+            if (ids.size > 1) break;
+            if (row.querySelector('time[datetime]') || REL_DATE_RE.test(row.textContent || '')) { found = row; break; }
+        }
+        let ts = 0;
+        if (found) {
+            const t = found.querySelector('time[datetime]');
+            ts = t ? (Date.parse(t.getAttribute('datetime')) || 0) : 0;
+            if (!ts) {
+                const m = (found.textContent || '').match(REL_DATE_RE);
+                if (m) ts = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]).getTime();
+            }
+        }
+        const ue = (found || a.parentElement).querySelector('a[href*="memberlist.php"], .username-coloured, .username');
+        out.push({
+            topicId, href: absHref(a), raw: (a.textContent || '').replace(/\s+/g, ' ').trim(), ts,
+            author: ue ? ue.textContent.trim() : '', authorId: ue ? userIdOf(ue) : null
+        });
+    });
+    return out;
+}
+
+function relPagingTpl(doc, rows, fid) {
+    let total = 0, found = null;
+    const consider = (a, n) => {
+        let u;
+        try { u = new URL(a.getAttribute('href'), location.origin + '/releases/'); } catch (e) { return; }
+        if (!/release/i.test(u.pathname)) return;
+        if (u.searchParams.has('cat') && u.searchParams.get('cat') !== String(fid)) return;
+        if (n > total) total = n;
+        if (found || n < 2) return;
+        for (const [k, v] of u.searchParams) {
+            if (k === 'cat') continue;
+            if (+v === n) { found = { href: u.href, param: k, offset: false, per: rows }; return; }
+            const per = +v / (n - 1);
+            if (Number.isInteger(per) && per >= 5 && per <= 200) { found = { href: u.href, param: k, offset: true, per }; return; }
+        }
+        const rx = new RegExp('([/_=-])' + n + '(/?)$');
+        if (rx.test(u.pathname)) found = { href: u.href, rx, per: rows };
+    };
+    doc.querySelectorAll('a[href]').forEach(a => {
+        const t = (a.textContent || '').trim();
+        if (/^\d{1,5}$/.test(t)) consider(a, +t);
+    });
+    const nx = doc.querySelector('a[rel="next"]');
+    if (nx && !found) consider(nx, 2);
+
+    const per = (found && found.per) || rows || 25;
+    const cm = ((doc.body && doc.body.textContent) || '').match(/(\d[\d.,]*)\s+release\b/i);
+    const count = cm ? parseInt(cm[1].replace(/[.,]/g, ''), 10) || 0 : 0;
+    total = Math.max(total, count ? Math.ceil(count / per) : 0, 1);
+    const tpl = { per, total, make: null };
+    if (found) {
+        tpl.make = page => {
+            const u = new URL(found.href);
+            if (found.param) u.searchParams.set(found.param, String(found.offset ? (page - 1) * found.per : page));
+            else u.pathname = u.pathname.replace(found.rx, (m, a, b) => a + page + b);
+            return u.pathname + u.search;
+        };
+    }
+    return tpl;
+}
+
+async function buildReleaseItems(recs, type) {
+    const order = [], pending = [];
+    recs.forEach(r => {
+        if (!isReleaseInSection(r.raw)) return;
+        const item = registry.get(r.topicId);
+        if (item) {
+            item.ts = r.ts || item.ts;
+            item.author = item.author || r.author;
+            item.authorId = item.authorId || r.authorId;
+            syncSectionType(item, type);
+            order.push({ item });
+        } else {
+            pending.push(r);
+            order.push({ rec: r });
+        }
+    });
+    if (pending.length) {
+        const metas = await workerCall('titles', pending.map(p => p.raw));
+        pending.forEach((rec, i) => {
+            let item = registry.get(rec.topicId);
+            if (!item) {
+                item = buildItem({ ...rec, type, meta: metas[i], views: 0, replies: 0, lastReplyTs: 0 });
+                registry.set(rec.topicId, item);
+                hydrateSync(item);
+            }
+            rec.item = item;
+        });
+    }
+    return order.map(o => o.item || o.rec.item);
+}
+
+async function pgFetchRel(src, page) {
+    const fid = String(src.id);
+    const load = async url => {
+        await netGate();
+        const resp = await fetch(url, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return new DOMParser().parseFromString(await resp.text(), 'text/html');
+    };
+    let tpl = relTpl.get(fid), doc, recs;
+    if (page === 1 || !tpl) {
+        doc = await load('/releases/?cat=' + encodeURIComponent(fid));
+        recs = parseReleaseRows(doc);
+        if (!recs.length) {
+            const msg = ((doc.querySelector('#message') || doc.body || {}).textContent || '').slice(0, 400);
+            if (/presto|soon|flood/i.test(msg)) return { items: [], flood: true, total: tpl ? tpl.total : 1, per: 25, current: page, results: 0, t: Date.now(), rel: true };
+            throw new Error('lista release non leggibile');
+        }
+        tpl = relPagingTpl(doc, recs.length, fid);
+        relTpl.set(fid, tpl);
+        if (page > 1) {
+            if (!tpl.make) throw new Error('paginazione lista release non leggibile');
+            doc = await load(tpl.make(page));
+            recs = parseReleaseRows(doc);
+        }
+    } else {
+        if (!tpl.make) throw new Error('paginazione lista release non leggibile');
+        doc = await load(tpl.make(page));
+        recs = parseReleaseRows(doc);
+    }
+    const items = await buildReleaseItems(recs, src.type);
+    return { items, flood: false, total: tpl.total, per: tpl.per, current: Math.min(page, tpl.total), results: 0, t: Date.now(), rel: true };
+}
+
 const subCache = new Map();
 const subTotals = new Map();
 const SUB_EXCLUDE_RE = /\b(richiest|regolament|segnalaz|comunicat|annunc|cestin)/i;
@@ -5523,11 +5921,23 @@ async function pgFetchHome(src, page) {
     const clamped = r => r.total < page || (r.current > 0 && r.current < page);
     const use = live.filter(r => !clamped(r));
     const total = Math.max(...live.map(r => r.total));
-    return { items: uniqById(use.flatMap(r => r.items)), flood: false, total, per: live[0].per, current: Math.min(page, total), results: 0, t: Date.now() };
+    const allRel = use.length > 0 && use.every(r => r.rel);
+    let merged = uniqById(use.flatMap(r => r.items));
+    if (allRel) merged = merged.map((it, i) => [it, i]).sort((a, b) => ((b[0].ts || 0) - (a[0].ts || 0)) || (a[1] - b[1])).map(x => x[0]);
+    return { items: merged, flood: false, total, per: live[0].per, current: Math.min(page, total), results: 0, t: Date.now(), rel: allRel };
 }
 
 async function pgFetch(src, page) {
     if (src.kind === 'home') return pgFetchHome(src, page);
+    if (src.kind === 'forum' && src.rel) {
+        try { return await pgFetchRel(src, page); }
+        catch (e) {
+            const msg = String((e && e.message) || '');
+            if (!/leggibile|HTTP 40[34]/.test(msg)) throw e;
+            console.warn('[MirSeer] lista release non disponibile per f=' + src.id + ', uso viewforum:', msg);
+            relBad.add(String(src.id));
+        }
+    }
     const first = await pgFetchOne(src, page);
     const firstDoc = first.doc;
     delete first.doc;
@@ -5612,6 +6022,7 @@ async function loadPage(page, opts = {}) {
     perByKey.set(src.key, PG.per);
     PG.page = Math.min(res.current > 0 ? res.current : page, PG.total);
     PG.items = res.items;
+    PG.relOrder = !!res.rel;
     if (rel && view.key === 'releaser' && !search.active) {
         if (rel.sq) { rel.sq.items = res.items; rel.sq.loading = false; rel.sq.exhausted = true; }
         else rel.items = res.items;
@@ -5623,12 +6034,35 @@ async function loadPage(page, opts = {}) {
 
     renderDeck(localFilterValue(), true);
     $('mirseer-app').scrollTop = 0;
+    eagerResolve(PG.items);
 
     if (pgOpenAfterLoad) {
         const pick = pgOpenAfterLoad === 'first' ? lastDisplayed[0] : lastDisplayed[lastDisplayed.length - 1];
         pgOpenAfterLoad = '';
         if (pick) { kbId = String(pick.id); kbApply(true); openDetailModal(pick); }
     }
+}
+
+let eagerRun = 0;
+function eagerResolve(items) {
+    const run = ++eagerRun;
+    const todo = (items || []).filter(it => it && !it.posterTried && !it.unavailable && !isProjLike(it));
+    if (!todo.length) return;
+    let i = 0;
+    const worker = async () => {
+        while (i < todo.length) {
+            if (run !== eagerRun) return;
+            const app = $('mirseer-app');
+            if (!app || app.style.display !== 'block') return;
+            const it = todo[i++];
+            if (it.posterTried) continue;
+            try { await scrapeTopicData(it); } catch (e) {}
+            if (run !== eagerRun) return;
+            if (it.posterTried) { refreshItem(it); genresSoon(); }
+        }
+    };
+    const n = Math.min(IS_COARSE ? 2 : 4, todo.length);
+    for (let k = 0; k < n; k++) worker();
 }
 
 function goPage(n) {
@@ -5641,7 +6075,13 @@ function goPage(n) {
 function pgOnSortChange() {
     if (!isPagedView()) return;
     const src = pgSource();
-    if (src && (src.kind === 'forum' || src.kind === 'home') && src.key !== PG.key) loadPage(1);
+    if (!src) return;
+    for (const key of pageCache.keys()) {
+        if (key.startsWith(src.key + '#')) pageCache.delete(key);
+    }
+    PG.page = 1;
+    PG.lastViewPage = 1;
+    loadPage(1, { force: true });
 }
 
 function pgWindow(cur, total) {
@@ -5736,8 +6176,40 @@ GM_addStyle(`
 .seer-pg-jump { width: 92px; height: 36px; }
 #mirseer-app.seer-light .seer-pg-btn { background: rgba(15,23,42,.05); color: #334155; }
 #mirseer-app.seer-light .seer-pg-btn:hover:not(:disabled) { color: #0f172a; }
-#mirseer-app.seer-light .seer-pg-btn.active { color: #fff; }
+#mirseer-app.seer-light .seer-pg-btn.active { color: var(--seer-accent); }
 @media (max-width: 560px) { .seer-pg-info { width: 100%; text-align: center; order: -1; } }
+`);
+
+GM_addStyle(`
+#mirseer-app .seer-adv-input { color-scheme: dark; }
+#mirseer-app.seer-light .seer-adv-input { color-scheme: light; }
+#mirseer-app input[type="number"] { -moz-padding-end: 8px; }
+#seer-search-input { padding-right: 74px; }
+.seer-search-clear {
+    position: absolute; right: 38px; background: none; border: none; color: var(--seer-text-muted);
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 5px 7px; border-radius: 6px;
+}
+.seer-search-clear:hover { color: var(--seer-accent); background: rgba(128,128,128,0.15); }
+#seer-search-input:placeholder-shown ~ .seer-search-clear { display: none; }
+`);
+
+GM_addStyle(`
+.seer-dlpath { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; }
+.seer-dlpath[hidden] { display: none; }
+.seer-dlpath input {
+    flex: 1; min-width: 0; padding: 8px 11px; border-radius: 9px; background: rgba(255,255,255,0.05);
+    border: 1px solid var(--seer-border); color: #fff; font-size: 12.5px; outline: none; font-family: inherit;
+}
+.seer-dlpath input:focus { border-color: var(--seer-accent); box-shadow: 0 0 0 3px var(--seer-accent-glow); }
+.seer-dlpath button { background: none; border: none; color: var(--seer-text-muted); cursor: pointer; font-size: 14px; padding: 5px 8px; border-radius: 6px; }
+.seer-dlpath button:hover { color: var(--seer-accent); background: rgba(128,128,128,0.15); }
+#mirseer-app.seer-light .seer-dlpath input { background: rgba(15,23,42,.04); color: #0f172a; }
+`);
+
+GM_addStyle(`
+.seer-tvinfo { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 9px; font-size: 12px; font-weight: 700;
+    background: rgba(99,102,241,0.14); border: 1px solid rgba(99,102,241,0.4); color: #c7d2fe; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mirseer-app.seer-light .seer-tvinfo { color: #4338ca; }
 `);
 
 GM_addStyle(`
@@ -6537,11 +7009,9 @@ function projHeadClick(e) {
 }
 
 GM_addStyle(`
-/* Nella pagina di una collezione NON compare nessun banner in alto */
 #mirseer-app[data-seer-view="project"] #seer-hero,
 #mirseer-app[data-seer-view="project"] .seer-pj-cover,
 #mirseer-app[data-seer-view="project"] .seer-proj-banner { display: none !important; }
-/* Tasto "Torna indietro" sempre visibile: compare quando la toolbar esce dallo schermo */
 #seer-pj-fab-back { display: none; position: fixed; top: calc(var(--seer-nav-h, 64px) + 10px); left: 276px; z-index: 120; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--seer-border); background: color-mix(in srgb, var(--seer-bg) 90%, transparent); color: var(--seer-text); font-size: 13px; font-weight: 800; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 6px 20px rgba(0,0,0,.35); }
 #seer-pj-fab-back.show { display: inline-flex; }
 #seer-pj-fab-back:hover { background: var(--seer-accent); border-color: var(--seer-accent); color: #fff; }
@@ -6581,7 +7051,6 @@ GM_addStyle(`
 .pj-tb-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .seer-pj-toolbar .seer-facet:disabled { opacity: .4; cursor: not-allowed; }
 .seer-pjdoc { color: var(--seer-text); font-size: 15px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-/* Override assoluto di sicurezza per testo forzato dal BBCode */
 #mirseer-app:not(.seer-light) .seer-pjdoc [color="black"],
 #mirseer-app:not(.seer-light) .seer-pjdoc [color="#000000"],
 #mirseer-app:not(.seer-light) .seer-pjdoc [color="#000"],
@@ -6607,7 +7076,6 @@ GM_addStyle(`
 .seer-pjdoc table { max-width: none; border-collapse: collapse; }
 .seer-pjdoc td, .seer-pjdoc th { vertical-align: top; padding: 4px 8px; }
 
-/* Adattamento banner panoramico per le righe dei progetti */
 .seer-row[data-topic-type="Progetti e Collezioni"] .seer-poster-wrap,
 .seer-row.is-proj .seer-poster-wrap {
     min-width: 110px !important;
@@ -6623,7 +7091,6 @@ GM_addStyle(`
     object-fit: cover !important;
 }
 
-/* Fix contrasto assoluto per spoiler, sfondi e testi in Dark Mode */
 #mirseer-app:not(.seer-light) .seer-pjdoc,
 #mirseer-app:not(.seer-light) .seer-pjdoc .spoiler,
 #mirseer-app:not(.seer-light) .seer-pjdoc .spoilerbox,
@@ -6637,14 +7104,12 @@ GM_addStyle(`
 #mirseer-app:not(.seer-light) .seer-pjdoc font {
     background-color: transparent !important;
 }
-/* Se il testo dentro allo spoiler è forzato bianco/grigio chiaro, lo rende leggibile */
 #mirseer-app:not(.seer-light) .seer-pjdoc [style*="color"],
 #mirseer-app:not(.seer-light) .seer-pjdoc font[color] {
     text-shadow: 0 1px 2px rgba(0,0,0,0.8);
 }
 
 
-/* Toolbar del progetto sempre visibile (sticky) in cima allo schermo */
 .seer-proj-head.pj-sticky {
     position: sticky !important;
     top: var(--seer-nav-h, 64px) !important;
@@ -6928,6 +7393,7 @@ function trackDl(it, uris, via) {
     try {
         uris = (uris || []).filter(u => /^magnet:/i.test(String(u)));
         if (!uris.length) return;
+        try { tvRecord(it, uris, via); } catch (e) { console.warn('tvRecord', e); }
         const now = Date.now();
         const known = uris.map(u => { const x = String(u).match(/[?&]xl=(\d+)/i); return x ? +x[1] : 0; });
         const fallback = (!known.some(Boolean) && it && it.sizeBytes) ? it.sizeBytes / uris.length : 0;
@@ -7039,9 +7505,10 @@ function acctParseProfile(doc, uid) {
         if (!label) return;
         let val = '';
         const sel = dd.querySelector('select');
-        val = sel ? acctTxt(sel.selectedOptions && sel.selectedOptions[0]) : acctTxt(dd);
+        val = (sel ? acctTxt(sel.selectedOptions && sel.selectedOptions[0]) : acctTxt(dd))
+            .replace(/\s*\[\s*(?:Modifica|Edit)[^\]]{0,30}\]\s*/gi, ' ').replace(/\s+/g, ' ').trim();
         if (!val) return;
-        const link = dd.querySelector('a[href^="http"], a[href^="/"], a[href^="./"]');
+        const link = [...dd.querySelectorAll('a[href]')].find(x => { const h = x.getAttribute('href') || ''; return /^(?:https?:|\/|\.\/)/.test(h) && !/ucp\.php/i.test(h); });
         const panel = dt.closest('.panel, .column1, .column2, fieldset');
         const h = panel && panel.querySelector('h3, h2, legend');
         const title = acctTxt(h) || 'Profilo';
@@ -7208,7 +7675,7 @@ function openAccount(tab) {
     hideModal();
     if (!currentUser) { toast('Accedi al forum per usare questa sezione', 'warn'); window.open(SITE_ROOT + 'ucp.php?mode=login', '_blank'); return; }
     if (view.key !== 'account') acct.prev = { key: view.key, section: view.section, page: PG.page };
-    acct.tab = tab || 'profile';
+    acct.tab = tab === 'stats' ? 'stats' : 'profile';
     setView('account');
     acctLoad();
 }
@@ -7307,7 +7774,7 @@ function renderAccountPage() {
     box.classList.remove('seer-grid');
     lastDisplayed = [];
     const cnt = $('seer-count'); if (cnt) cnt.innerText = '';
-    const tabs = [['profile', '\ud83d\udc64 Il mio profilo'], ['settings', '\u2699\ufe0f Impostazioni utente'], ['stats', '\ud83d\udcca La mia attivit\u00e0']];
+    const tabs = [['profile', '\ud83d\udc64 Il mio profilo'], ['stats', '\ud83d\udcca La mia attivit\u00e0']];
     const body = acct.tab === 'profile' ? acctProfileHtml() : acct.tab === 'settings' ? acctSettingsHtml() : acctStatsHtml();
     const keep = acct.tab === 'settings' && acct.pageData && acct.pageData.formEl;
     if (keep && keep.parentNode) keep.parentNode.removeChild(keep);
@@ -7321,7 +7788,7 @@ function acctClick(e) {
     e.preventDefault();
     const a = b.dataset.ac, v = b.dataset.v;
     if (a === 'back') closeAccount();
-    else if (a === 'tab') { acct.tab = v; renderAccountPage(); acctLoad(); }
+    else if (a === 'tab') { acct.tab = v === 'stats' ? 'stats' : 'profile'; renderAccountPage(); acctLoad(); }
     else if (a === 'mod') { const m = acctMods().find(x => x.k === v); if (m) acctLoadPage(m); }
     else if (a === 'save') acctSave();
     else if (a === 'retry') acctLoad(true);
@@ -7372,7 +7839,8 @@ function init() {
             <div style="display:flex; align-items:center; gap:12px; flex:1; justify-content:flex-end;">
                 <div class="seer-search-wrap">
                     <select class="seer-search-filter" id="seer-search-section-filter" title="Ambito della ricerca"></select>
-                    <input type="text" class="seer-search" id="seer-search-input" placeholder="Cerca…" />
+                    <input type="text" class="seer-search" id="seer-search-input" placeholder="Cerca…" autocomplete="off" />
+                    <button class="seer-search-clear" id="seer-search-clear" type="button" title="Svuota la ricerca" aria-label="Svuota la ricerca">✕</button>
                     <button class="seer-search-btn" id="seer-search-submit" title="Cerca">🔍</button>
                 </div>
                 <div class="seer-user" id="seer-user">
@@ -7511,6 +7979,13 @@ function init() {
                     </div>
                     <div class="seer-modal-foot">
                         <div class="seer-modal-tools" id="seer-modal-tools"></div>
+                        <div class="seer-dlpath" id="seer-dlpath" hidden>
+                            <span title="Cartella di download">📁</span>
+                            <input type="text" id="seer-dlpath-input" list="seer-dlpath-list" autocomplete="off" spellcheck="false" placeholder="Cartella di download">
+                            <datalist id="seer-dlpath-list"></datalist>
+                            <button type="button" id="seer-dlpath-forget" title="Dimentica la cartella salvata per questa serie" hidden>🗑</button>
+                            <button type="button" id="seer-dlpath-clear" title="Svuota (torna alla cartella predefinita)">✕</button>
+                        </div>
                         <div class="seer-magnet-box" id="seer-magnet-box">
                             <button class="seer-action-btn" id="seer-send-all-btn" style="display:none;"><span>⬇️</span> Invia Tutti</button>
                             <div class="seer-magnet-list" id="seer-magnet-list"></div>
@@ -7893,7 +8368,7 @@ function init() {
         sTcTest.disabled = tcClient() === 'off';
     };
 
-    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'follows', 'accent', 'accent2', 'density'];
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'follows', 'tvTrack', 'accent', 'accent2', 'density'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
     $('seer-export-btn').onclick = () => {
@@ -7966,6 +8441,7 @@ function init() {
         trSid = null;
 
         if (isObj(d.follows)) { ['rel', 'title'].forEach(t => { if (isObj(d.follows[t])) Object.assign(follows[t], d.follows[t]); }); saveFollows(); n++; }
+        if (isObj(d.tvTrack)) { Object.keys(d.tvTrack).forEach(k => { if (isObj(d.tvTrack[k]) && isObj(d.tvTrack[k].eps)) tv[k] = d.tvTrack[k]; }); tvSave(); n++; }
         if (/^#[0-9a-f]{6}$/i.test(d.accent || '')) {
             settings.accent = d.accent; setPref('accent', d.accent);
             if (isStr(d.accent2) && /^[#a-z0-9(),% -]{4,80}$/i.test(d.accent2)) { settings.accent2 = d.accent2; setPref('accent2', d.accent2); }
@@ -8112,11 +8588,23 @@ function init() {
         if (!b || !currentModalItem) return;
         const it = currentModalItem;
         if (b.dataset.act === 'fav') toggleFav(it);
-        else if (b.dataset.act === 'seen') { markSeen(it, !isSeen(it.id)); toast(isSeen(it.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
+        else if (b.dataset.act === 'seen') { markSeen(it, !isSeen(it.id)); if (isSeen(it.id)) { try { tvRecord(it, null, 'manual'); } catch (e) {} } toast(isSeen(it.id) ? '✓ Segnato come scaricato' : 'Rimosso dagli scaricati'); }
         else if (b.dataset.act === 'trailer') openTrailer(it);
         else if (b.dataset.act === 'followtitle') toggleFollowTitle(it);
         else if (b.dataset.act === 'ext') { const m = $('seer-ext-menu'); if (m) m.classList.toggle('open'); }
+        else if (b.dataset.act === 'dlpath') dlToggleBar();
     };
+    $('seer-dlpath-input').oninput = e => { dlOverride = e.target.value; dlSyncBtn(); };
+    $('seer-dlpath-input').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } if (e.key !== 'Escape') e.stopPropagation(); };
+    $('seer-dlpath-forget').onclick = () => {
+        if (!currentModalItem) return;
+        tvSetDir(currentModalItem, '');
+        $('seer-dlpath-forget').hidden = true;
+        $('seer-dlpath-input').placeholder = 'Cartella di download · vuoto = ' + (tcPathFor(currentModalItem) || 'predefinita del client');
+        dlSyncBtn();
+        toast('Cartella della serie dimenticata');
+    };
+    $('seer-dlpath-clear').onclick = () => { dlOverride = ''; $('seer-dlpath-input').value = ''; dlSyncBtn(); $('seer-dlpath-input').focus(); };
 
     $('seer-modal-metarow').onclick = e => {
         if (currentModalItem && e.target.closest('[data-act="followrel"]')) { toggleFollowRel(currentModalItem.author, currentModalItem.authorId, currentModalItem.authorAvatar); return; }
@@ -8230,7 +8718,7 @@ function init() {
 
     $('seer-load-more-btn').onclick = async () => {
         if (search.active) loadMoreSearch();
-        else if (view.key === 'releasers') { show = false; }
+        else if (view.key === 'releasers') { }
         else if (view.key === 'releaser') {
             if (rel && rel.sq) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; loadRelSearchPage(); }
             else loadMoreReleaser();
@@ -8314,6 +8802,12 @@ function init() {
     };
     searchInput.onkeydown = e => { if (e.key === 'Enter') searchNow(); };
     $('seer-search-submit').onclick = searchNow;
+    $('seer-search-clear').onclick = () => {
+        searchInput.value = '';
+        clearTimeout(searchTimer);
+        searchInput.oninput({ target: searchInput });
+        searchInput.focus();
+    };
 
     $('seer-search-section-filter').onchange = () => {
         $('seer-search-input').placeholder = `Cerca in ${resolveSearchScope().label}…  ( / )`;
@@ -8404,6 +8898,7 @@ function init() {
     $('seer-wl-panel').onclick = e => {
         const d = e.target.closest('[data-wl-del]');
         if (d) {
+            if (d.dataset.wlDel === 'title') tvSetOff(d.dataset.k, true);
             delete follows[d.dataset.wlDel][d.dataset.k];
             saveFollows();
             wlNew.forEach((it, id) => { if (!isFollowingRel(it.author) && !isFollowingTitle(it)) wlNew.delete(id); });
