@@ -1731,6 +1731,7 @@ const snapshot = it => ({
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
     sizeBytes: it.sizeBytes || 0,
+    realTitle: it._realTitle || null,
     author: it.author || '', authorId: it.authorId || null, authorAvatar: it.authorAvatar || null,
     body: it.kind === 'text' ? (it.body || '').slice(0, 4000) : null
 });
@@ -1758,6 +1759,11 @@ window.addEventListener('pagehide', () => {
 
 function readCache(id, item = null) {
     const hit = resolvedMem.get(String(id));
+    if (hit && item && item._fromProject && !hit.realTitle) {
+        resolvedMem.delete(String(id));
+        cacheDel(CACHE_PREFIX + id);
+        return null;
+    }
     if (hit) {
         if (item && isProjLike(item) && !hit.poster) {
             resolvedMem.delete(String(id));
@@ -1771,6 +1777,7 @@ function readCache(id, item = null) {
     if (!raw) return null;
     let p;
     try { p = JSON.parse(raw); } catch (e) { return null; }
+    if (item && item._fromProject && !p.realTitle) { cacheDel(CACHE_PREFIX + id); return null; }
     if (item && isProjLike(item) && !p.poster) {
         cacheDel(CACHE_PREFIX + id);
         pjLog(id, 'cache senza banner scartata (disco)');
@@ -3264,7 +3271,33 @@ function findMagnets(doc, rawText) {
     }));
 }
 
+function projRealTitle(doc) {
+    const a = doc.querySelector('h2.topic-title a, .topic-title a, h2 a[href*="viewtopic.php"]');
+    let t = a ? a.textContent.replace(/\s+/g, ' ').trim() : '';
+    if (!t) t = String(doc.title || '').replace(/\s+[-\u2013|]\s+[^-\u2013|]*$/, '').trim();
+    return t;
+}
+
+function applyRealTitle(item, title) {
+    if (!title) return;
+    item._realTitle = title;
+    if (item.rawTitle === title) return;
+    const meta = pure.parseReleaseInfo(title);
+    item.rawTitle = title;
+    item.cleanTitle = meta.cleanTitle;
+    item.year = meta.year;
+    item.meta = meta;
+    item._hay = null; item._words = null;
+    item.displayTitle = composeDisplayTitle(item);
+}
+
+function fixProjTitle(item, doc) {
+    if (!item._fromProject) return;
+    applyRealTitle(item, projRealTitle(doc));
+}
+
 function applyParsed(item, p) {
+    if (p.realTitle && item._fromProject) applyRealTitle(item, p.realTitle);
     item.poster = p.poster || null;
     item.posterSrc = p.posterSrc || null;
     item.posterAlts = (p.posterAlts || []).slice();
@@ -3431,7 +3464,7 @@ function scrapeTopicData(item, el = null, low = false) {
     if (item.posterTried) return Promise.resolve(snapshot(item));
     if (isProjLike(item)) return scrapeProjectBanner(item, el);
 
-    const cached = readCache(item.id);
+    const cached = readCache(item.id, item);
     if (cached) {
         applyParsed(item, cached);
         if (!el) warmImage(item.poster);
@@ -3454,6 +3487,7 @@ function scrapeTopicData(item, el = null, low = false) {
 
             const { doc, html } = page;
             try { projTypeFromCrumbs(item, doc); } catch (e) {}
+            try { fixProjTitle(item, doc); } catch (e) {}
             const postContent = doc.querySelector('.post .content, .postbody .content, div.content');
             const fullText = postContent ? extractText(postContent) : '';
             const magnets = findMagnets(doc, html);
