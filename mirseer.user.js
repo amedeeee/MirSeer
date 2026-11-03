@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.4
+// @version      1.4.5
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -28,8 +28,6 @@ const HERO_MAX_TOTAL = 100;
 const PAGE_SIZE = 25;
 const INITIAL_PAGES = IS_COARSE ? 2 : 3;
 const NET_GAP = 0;
-const AUTO_MIN = 12;
-const AUTO_PAGES_MAX = 6;
 const IMG_HI_COUNT = 8;
 
 const EXCLUDE_SELECTOR = '#recent-topics, .recent-topics, .recenttopics, [class*="recent_topics"], [class*="active-topics"], [id*="active-topics"]';
@@ -150,7 +148,6 @@ GM_addStyle(`
     max-height: calc(100vh - var(--seer-nav-h)); overflow-y: auto;
     padding: 18px 14px 40px 20px; border-right: 1px solid var(--seer-border);
 }
-.seer-modal-left img { object-fit: contain !important; }
 .seer-sidebar { scrollbar-width: none; }
 .seer-sidebar::-webkit-scrollbar { display: none; }
 .seer-side-title {
@@ -1441,9 +1438,6 @@ let sidebarLoaded = false, sidebarReady = false;
 let lastBaseCount = 0;
 let lastBase = [];
 let advOpen = false;
-const newGx = () => ({ key: '', name: '', items: [], nextUrl: null, exhausted: true, loading: false, mode: 'author' });
-let gx = newGx();
-let autoBusy = false;
 let selMode = false;
 const selected = new Set();
 let lastSelId = null;
@@ -1760,6 +1754,11 @@ const pjLog = (...a) => { if (PROJ_DEBUG) console.log('[mirseer-proj]', ...a); }
 const isProjLike = it => !!it && (it.type === PROJECT_SECTION || it.forumName === PROJECT_SECTION);
 
 const resolvedMem = new Map();
+function capMap(m, max) {
+    let n = m.size - max;
+    if (n <= 0) return;
+    for (const k of m.keys()) { if (n-- <= 0) break; m.delete(k); }
+}
 const savePending = new Map();
 const ratingTried = new Set();
 let saveTimer = null;
@@ -1771,7 +1770,7 @@ const snapshot = it => ({
     magnets: (it.magnets || []).map(m => ({ uri: m.uri, dn: m.dn || '', label: m.label, season: m.season == null ? null : m.season, ep: m.ep == null ? null : m.ep })),
     thanksUrl: it.thanksUrl || null, extId: it.extId || null, kind: it.kind || 'video',
     origTitle: it.origTitle || null, fieldYear: it.fieldYear || null, genre: it.genre || null, country: it.country || null,
-    tmdbTitle: it.tmdbTitle || null, tmdbYear: it.tmdbYear || null,
+    tmdbTitle: it.tmdbTitle || null, tmdbYear: it.tmdbYear || null, synTm: it.synTm || null,
     tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null,
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
@@ -1785,7 +1784,7 @@ function flushSaves() {
     saveTimer = null;
     savePending.forEach(it => {
         const snap = snapshot(it);
-        resolvedMem.set(String(it.id), snap);
+        resolvedMem.set(String(it.id), snap); capMap(resolvedMem, 1500);
         cacheSet(CACHE_PREFIX + it.id, JSON.stringify({ t: Date.now(), ...snap }));
     });
     savePending.clear();
@@ -1834,7 +1833,7 @@ function readCache(id, item = null) {
         p.posterAlts = (p.posterAlts || []).filter(u => u !== alt && u !== p.poster);
         p.poster = alt || null;
     }
-    resolvedMem.set(String(id), p);
+    resolvedMem.set(String(id), p); capMap(resolvedMem, 1500);
     return p;
 }
 
@@ -3376,10 +3375,11 @@ function applyParsed(item, p) {
     item.body = p.body || null;
     item.tmdbTitle = p.tmdbTitle || null;
     item.tmdbYear = p.tmdbYear || null;
+    item.synTm = p.synTm || null;
     item.displayTitle = composeDisplayTitle(item);
     if (isProjLike(item) && !item.poster) return;
     item.posterTried = true;
-    resolvedMem.set(String(item.id), snapshot(item));
+    resolvedMem.set(String(item.id), snapshot(item)); capMap(resolvedMem, 1500);
 }
 
 function composeDisplayTitle(item) {
@@ -3401,7 +3401,7 @@ function tmdbTitleReliable(item, tm) {
 
 let tmdbTitleChain = Promise.resolve();
 function upgradeTmdbTitle(item, cached) {
-    if (!cached || cached.tmdbTitle !== undefined || !item.tmdbId || !item.tmdbKind || item._ttTried) return;
+    if (!cached || (cached.tmdbTitle !== undefined && cached.synTm !== undefined) || !item.tmdbId || !item.tmdbKind || item._ttTried) return;
     const key = getTmdbKey();
     if (!key) return;
     item._ttTried = true;
@@ -3413,6 +3413,8 @@ function upgradeTmdbTitle(item, cached) {
             tm.byId = !!item.extId;
             item.tmdbTitle = tmdbTitleReliable(item, tm) ? tm.title : null;
             item.tmdbYear = tm.year || null;
+            if (isRealProse(tm.overview) && tmdbTitleReliable(item, tm)) { item.synopsis = tm.overview; item.synTm = true; }
+            else item.synTm = item.synTm || null;
             item.displayTitle = composeDisplayTitle(item);
             saveCache(item);
             refreshItem(item);
@@ -3559,7 +3561,7 @@ function scrapeTopicData(item, el = null, low = false) {
 
             let posterUrl = null, posterAlts = [], posterSrc = null, backdrop = null;
             let synopsisText = null;
-            let tm = null, tmdbFailed = false;
+            let tm = null, tmdbFailed = false, synFromTmdb = false;
 
             if (postContent) {
                 const found = pickPosters(postContent, item, author);
@@ -3578,7 +3580,7 @@ function scrapeTopicData(item, el = null, low = false) {
                         }
                         backdrop = t.backdrop || null;
                     }
-                    if (!synopsisText && t && isRealProse(t.overview)) synopsisText = t.overview;
+                    if (t && isRealProse(t.overview) && (!synopsisText || tmdbTitleReliable(item, t))) { synopsisText = t.overview; synFromTmdb = true; }
                 } catch (e) { console.warn('TMDB error', e); tmdbFailed = true; }
             }
 
@@ -3587,7 +3589,7 @@ function scrapeTopicData(item, el = null, low = false) {
                 poster: posterUrl, posterSrc, posterAlts, backdrop,
                 synopsis: synopsisText || (kind === 'text' ? '' : "Sinossi disponibile all'interno del post sul forum."),
                 magnets, magnet: magnets[0] ? magnets[0].uri : null, thanksUrl, extId: item.extId || null, kind,
-                tmdbId: tm ? tm.id || null : null, tmdbKind: tm ? tm.kind || null : null,
+                tmdbId: tm ? tm.id || null : null, tmdbKind: tm ? tm.kind || null : null, synTm: synFromTmdb ? true : null,
                 tmdbTitle: (tm && tmdbTitleReliable(item, tm)) ? tm.title : null, tmdbYear: tm ? tm.year || null : null,
                 vote: tm ? tm.vote || null : null, genres: tm ? tm.genres || [] : [],
                 trailer: tm ? tm.trailer || null : null, imdbId: tm ? tm.imdbId || null : null,
@@ -4499,11 +4501,11 @@ function swGet(uri, guard) {
                 seed: +j.seed || 0, leech: +j.leech || 0, done: +j.completed || 0,
                 tracker: j.tracker || '', upd: j.lastUpdate ? j.lastUpdate * 1000 : 0
             };
-            swCache.set(k, rec);
+            swCache.set(k, rec); capMap(swCache, 2000);
             return rec;
         } catch (e) {
             const rec = { t: Date.now(), ok: false, err: String((e && e.message) || e) };
-            swCache.set(k, rec);
+            swCache.set(k, rec); capMap(swCache, 2000);
             return rec;
         } finally { clearTimeout(to); }
     }).finally(() => swInflight.delete(k));
@@ -5161,10 +5163,6 @@ function renderRelPanel() {
     if (im) im.addEventListener('error', () => { im.parentElement.textContent = '👤'; });
 }
 
-async function loadReleaserPage() {}
-async function loadRelSearchPage() {}
-async function loadMoreReleaser() {}
-
 const relKeywordUrl = (r, q) =>
     `/search.php?keywords=${encodeURIComponent(q)}&terms=all&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
     (r.id ? `&author_id=${encodeURIComponent(r.id)}` : `&author=${encodeURIComponent(r.name)}`) + `&submit=Cerca`;
@@ -5234,75 +5232,6 @@ async function openReleaser(name, id, avatar) {
     await loadPage(wantPage);
 }
 
-const GX_VIEWS = ['home', 'films', 'series', 'section'];
-const gxKey = () => (filters.releaser || '').trim().toLowerCase() + '|' + currentScope().fids.join(',');
-const gxApplies = () => !search.active && GX_VIEWS.includes(view.key)
-    && false;
-
-const relAuthorUrl = (name, fids) =>
-    `/search.php?keywords=&author=${encodeURIComponent(name)}&terms=all&sc=1&sf=firstpost&sr=topics&sk=t&sd=d&st=0&ch=300&t=0` +
-    fids.map(id => `&f[]=${id}&fid[]=${id}`).join('') + `&submit=Cerca`;
-
-async function loadGxPage() {
-    const g = gx;
-    if (g.loading || g.exhausted) return;
-    g.loading = true;
-    try {
-        const sc = currentScope();
-        const url = g.nextUrl || (g.mode === 'author' ? relAuthorUrl(g.name, sc.fids) : buildSearchUrl(g.name, sc.fids));
-        const page = await fetchSearchPage(url, sc);
-        if (gx !== g) return;
-        if (page.flood) { toast('⏳ Limite frequenza ricerche del forum: riprova tra qualche secondo', 'warn', 4000); g.exhausted = true; return; }
-        g.items = uniqById([...g.items, ...page.items]);
-        g.nextUrl = page.nextUrl;
-        if (!page.nextUrl) {
-            if (g.mode === 'author' && !g.items.length) { g.mode = 'title'; g.nextUrl = null; }
-            else g.exhausted = true;
-        }
-    } catch (e) {
-        console.error('Global releaser search failed', e);
-        g.exhausted = true;
-    } finally {
-        g.loading = false;
-        if (gx === g && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue());
-    }
-}
-
-let gxTimer = null;
-function gxStart() {
-    return;
-    clearTimeout(gxTimer);
-    gxTimer = setTimeout(() => {
-        const name = (filters.releaser || '').trim();
-        if (name.length < 3 || search.active || !GX_VIEWS.includes(view.key)) { gx = newGx(); return; }
-        const key = gxKey();
-        if (gx.key === key) return;
-        const g = gx = { ...newGx(), key, name, exhausted: false };
-        (async () => { for (let i = 0; i < 2 && gx === g && !g.exhausted; i++) await loadGxPage(); })();
-    }, 600);
-}
-
-const wantMore = () => anyFilter() || ((view.key === 'films' || view.key === 'series') && !search.active);
-const minNeeded = () => anyFilter() ? AUTO_MIN : ((view.key === 'films' || view.key === 'series') ? 40 : 0);
-
-async function autoPage() {
-    return;
-    if (autoBusy || search.active || !wantMore() || !GX_VIEWS.includes(view.key)) return;
-    if (gxApplies() && gx.loading) return;
-    autoBusy = true;
-    try {
-        for (let i = 0; i < AUTO_PAGES_MAX; i++) {
-            if (search.active || !wantMore() || !GX_VIEWS.includes(view.key)) break;
-            const done = view.key === 'section' ? currentSectionStore().exhausted : main.exhausted;
-            if (done || lastDisplayed.length >= minNeeded()) break;
-            if (view.key === 'section') await loadSection(view.section, currentSectionStore());
-            else await loadMoreMain();
-            renderDeck(localFilterValue(), true);
-        }
-    } catch (e) { console.warn('autoPage', e); }
-    finally { autoBusy = false; updateLoadMore(); }
-}
-
 function getVisibleItems() {
     let base;
     if (isPagedView()) base = PG.items;
@@ -5315,10 +5244,6 @@ function getVisibleItems() {
         base = main.items;
         if (view.key === 'films') base = base.filter(i => i.type === 'Film');
         if (view.key === 'series') base = base.filter(i => i.type === 'Serie TV');
-    }
-    if (gxApplies()) {
-        const sc = currentScope();
-        base = uniqById([...base, ...gx.items.filter(it => inScope(it, sc))]);
     }
     lastBase = base;
     lastBaseCount = base.length;
@@ -5348,19 +5273,9 @@ function syncSidebarActive() {
 }
 
 function updateLoadMore() {
-    { const _b = $('seer-load-more-btn'); if (_b) _b.style.display = 'none'; renderPager(); return; }
-    const btn = $('seer-load-more-btn');
-    let show = true, label = '📥 Carica Altre Uscite';
-    if (search.active) { show = !!search.nextUrl; label = '📥 Carica altri risultati'; }
-    else if (view.key === 'favs') { show = false; }
-    else if (view.key === 'releaser') {
-        if (rel && rel.sq) { show = !rel.sq.exhausted; label = '📥 Carica altri risultati'; }
-        else { show = !!rel && !rel.exhausted; label = '📥 Carica altre release'; }
-    }
-    else if (view.key === 'section') { show = !currentSectionStore().exhausted; label = '📥 Carica altri topic'; }
-    else { show = !main.exhausted || (gxApplies() && !gx.exhausted); }
-    btn.style.display = show ? '' : 'none';
-    btn.innerText = label;
+    const _b = $('seer-load-more-btn');
+    if (_b) _b.style.display = 'none';
+    renderPager();
 }
 
 function currentScope() {
@@ -5556,39 +5471,11 @@ function renderDeck(filterQuery = '', noAuto = false) {
     updateChrome();
     if (filterQuery && !search.active) { const fq = fuzzyTokens(filterQuery); displayed = displayed.filter(item => fuzzyScore(item, fq) > 0); }
 
-    let countText = '';
-    if (search.active) {
-        const nTitles = displayed.length;
-        const nVers = displayed.reduce((acc, it) => acc + ((it._vers && it._vers.length) || 1), 0);
-        const hasGrouping = nVers > nTitles;
-        const isPaged = isPagedView() && (PG.total > 1 || (PG.results > 0 && PG.results > nVers));
-
-        if (nTitles === 0) {
-            countText = `0 risultati per "${search.query}"`;
-        } else if (!isPaged) {
-            // Singola pagina o tutti i risultati del forum sono in questa vista
-            if (nTitles === 1) {
-                countText = hasGrouping
-                    ? `1 titolo (${nVers} versioni trovate) per "${search.query}"`
-                    : `1 titolo trovato per "${search.query}"`;
-            } else {
-                countText = hasGrouping
-                    ? `${nTitles} titoli (${nVers} versioni complessive) per "${search.query}"`
-                    : `${nTitles} titoli trovati per "${search.query}"`;
-            }
-        } else {
-            // Risultati distribuiti su più pagine del forum
-            const tWord = nTitles === 1 ? 'titolo' : 'titoli';
-            const versDetail = hasGrouping ? ` (${nVers} versioni)` : '';
-            const forumTotal = PG.results > 0 ? `${PG.results} release trovate per "${search.query}" · ` : '';
-            countText = `${forumTotal}${nTitles} ${tWord} in questa pagina${versDetail}${pgSuffix()}`;
-        }
-    } else {
-        countText = view.key === 'releaser'
-            ? `${displayed.length} release mostrate${pgSuffix()}`
-            : `${displayed.length} uscite mostrate${pgSuffix()}`;
-    }
-    $('seer-count').innerText = countText;
+    $('seer-count').innerText = search.active
+        ? ((isPagedView() && PG.results > displayed.length)
+            ? `${PG.results} release trovate per "${search.query}" · ${displayed.length} in questa pagina${pgSuffix()}`
+            : `${displayed.length} risultati per "${search.query}"${pgSuffix()}`)
+        : (view.key === 'releaser' ? `${displayed.length} release mostrate${pgSuffix()}` : `${displayed.length} uscite mostrate${pgSuffix()}`);
 
     if (displayed.length === 0) {
         lastDisplayed = [];
@@ -5598,7 +5485,6 @@ function renderDeck(filterQuery = '', noAuto = false) {
         else if (view.key === 'releaser' && !search.active && rel && lastBaseCount === 0) showListMessage(rel.loading ? 'Caricamento delle release…' : `Nessuna release trovata per ${esc(rel.name)}.`);
         else if (anyFilter() && lastBaseCount > 0) showListMessage('Nessuna uscita in questa pagina corrisponde ai filtri attivi. Prova ad azzerarli o a cambiare pagina.');
         else showListMessage('Nessuna uscita da mostrare qui.');
-        if (!noAuto) setTimeout(autoPage, 0);
         warmRatings(lastBase);
         return;
     }
@@ -5651,7 +5537,6 @@ function renderDeck(filterQuery = '', noAuto = false) {
     lastDisplayed = [...listContainer.querySelectorAll('.seer-row')].map(r => registry.get(String(r.dataset.topicId))).filter(Boolean);
     kbApply(false);
     if ($('seer-modal-overlay').style.display === 'flex') updateModalNav();
-    if (!noAuto) setTimeout(autoPage, 0);
     warmRatings(lastBase);
 }
 
@@ -5675,7 +5560,6 @@ async function setViewCore(key, section = null) {
     const token = ++viewToken;
     pgToken++;
     rel = null;
-    gx = newGx();
     if (search.active) {
         searchToken++;
         search = { active: false, scope: 'scoped', query: '', label: '', items: [], nextUrl: null, sc: null, fuzzy: false };
@@ -5937,8 +5821,6 @@ async function runSearch(query) {
         }
     }
 }
-
-async function loadMoreSearch() {}
 
 function resetSearchState() {
     searchToken++;
@@ -7335,7 +7217,6 @@ function pjFabUpdate() {
     b.classList.toggle('show', show);
 }
 
-const PJ_SHOW_COVER = false;
 let pjThemeObs = null, pjOpening = false, pjCtx = null;
 
 GM_addStyle(`
@@ -9014,13 +8895,7 @@ function init() {
     };
 
     $('seer-load-more-btn').onclick = async () => {
-        if (search.active) loadMoreSearch();
-        else if (view.key === 'releasers') { }
-        else if (view.key === 'releaser') {
-            if (rel && rel.sq) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; loadRelSearchPage(); }
-            else loadMoreReleaser();
-        }
-        else if (gxApplies() && !gx.exhausted) { $('seer-load-more-btn').innerText = 'Caricamento in corso...'; await loadGxPage(); updateLoadMore(); }
+        if (search.active || view.key === 'releasers' || view.key === 'releaser') { }
         else if (view.key === 'section') loadMoreSection();
         else loadMorePages();
     };
@@ -9051,7 +8926,6 @@ function init() {
         else if (t) filters.type = filters.type === t ? 'all' : t;
         else if (fm) filters.fmt = filters.fmt === fm ? 'all' : fm;
         else if (f === 'reset') {
-            gx = newGx();
             Object.assign(filters, newFilters());
             if (hideSeen) { hideSeen = false; setPref('hideSeen', false); }
         } else if (f === 'hideSeen') { hideSeen = !hideSeen; setPref('hideSeen', hideSeen); }
@@ -9070,7 +8944,7 @@ function init() {
     };
     $('seer-adv-yfrom').oninput = e => { filters.yFrom = parseInt(e.target.value, 10) || null; rerenderSoon(); };
     $('seer-adv-yto').oninput = e => { filters.yTo = parseInt(e.target.value, 10) || null; rerenderSoon(); };
-    $('seer-adv-rel').oninput = e => { filters.releaser = e.target.value.trim(); rerenderSoon(); gxStart(); };
+    $('seer-adv-rel').oninput = e => { filters.releaser = e.target.value.trim(); rerenderSoon(); };
     $('seer-adv-codec').onchange = e => { filters.codec = e.target.value || 'all'; renderDeck(localFilterValue()); };
 
     const searchInput = $('seer-search-input');
@@ -9188,7 +9062,7 @@ function init() {
     $('seer-user-btn').onclick = e => { e.stopPropagation(); $('seer-user-menu').classList.toggle('open'); };
     document.addEventListener('click', e => { if (!e.target.closest('.seer-user')) $('seer-user-menu').classList.remove('open'); });
     $('seer-proj-head').addEventListener('click', projHeadClick);
-    $('mirseer-app').addEventListener('scroll', pjFabUpdate, { passive: true });
+    { let _pjRaf = 0; $('mirseer-app').addEventListener('scroll', () => { if (_pjRaf) return; _pjRaf = requestAnimationFrame(() => { _pjRaf = 0; pjFabUpdate(); }); }, { passive: true }); }
     $('seer-main-list').addEventListener('click', projHeadClick);
     acctInit();
 
