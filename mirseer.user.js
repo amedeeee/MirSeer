@@ -400,6 +400,20 @@ GM_addStyle(`
 }
 .seer-magnet-copy:hover { background: var(--seer-accent); color: #fff; }
 .seer-magnet-copy.copied { background: #10b981; border-color: #10b981; color: #fff; }
+/* MIRSEER-WEBTOR-PATCH: pulsanti streaming browser */
+.seer-action-btn.seer-webtor-btn {
+    background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%) !important;
+    box-shadow: 0 6px 20px rgba(14,165,233,0.4) !important;
+    color: #fff !important;
+}
+.seer-action-btn.seer-webtor-btn:hover { box-shadow: 0 10px 28px rgba(14,165,233,0.65) !important; }
+.seer-magnet-webtor {
+    flex-shrink: 0; background: rgba(14,165,233,0.22); border: 1px solid rgba(14,165,233,0.5); color: #38bdf8;
+    font-size: 12px; font-weight: 800; padding: 6px 12px; border-radius: 7px; cursor: pointer; transition: all 0.2s;
+}
+.seer-magnet-webtor:hover { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+#mirseer-app.seer-light .seer-magnet-webtor { color: #0284c7; background: rgba(14,165,233,0.12); }
+#mirseer-app.seer-light .seer-magnet-webtor:hover { color: #fff; background: #0ea5e9; }
 
 .seer-load-btn { background: #151d2e; border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 700; padding: 12px 30px; border-radius: 50px; cursor: pointer; transition: 0.2s; font-size: 13.5px; }
 .seer-load-btn:hover { background: var(--seer-accent); border-color: var(--seer-accent); box-shadow: 0 8px 25px var(--seer-accent-glow); }
@@ -4413,6 +4427,220 @@ function openMagnet(uri) {
     a.click();
     a.remove();
 }
+/* MIRSEER-WEBTOR-PATCH: streaming via Webtor, nello stesso overlay del trailer.
+   MIRSEER-WEBTOR-INLINE MIRSEER-WEBTOR-PX
+   NOTA: il magnet viene inviato ai server di webtor.io (cloud proxy). */
+/* MIRSEER-PLAY-PATCH: pipeline di riproduzione intelligente.
+   router -> (incompatibile) VLC | (compatibile) Webtor + watchdog -> (errore/timeout) VLC */
+const PLAY_INIT_TIMEOUT_MS = 8000;   /* il player deve segnalare "inited" entro 8s */
+const PLAY_STALL_TIMEOUT_MS = 15000; /* buffering continuo oltre 15s = stallo */
+const VLC_PREF_KEY = 'vlcStreamBase'; /* base URL di TorrServer, es. http://127.0.0.1:8090 */
+
+/* Motivi per cui un rilascio NON e' riproducibile in un <video> del browser. */
+function browserIncompatReasons(item, uri) {
+    const m = (item && item.meta) || {};
+    const dn = (uri && typeof magnetDn === 'function') ? magnetDn(String(uri)) : '';
+    const pool = [item && item.rawTitle, item && item.cleanTitle, dn].filter(Boolean).join(' ');
+    const out = [];
+    if (m.is4k || /\b(2160p|4k|uhd)\b/i.test(pool)) out.push('4K/2160p');
+    if (m.isH265 || /\b(x265|hevc|h[\s.]?265)\b/i.test(pool)) out.push('HEVC/H.265');
+    if (m.is10bit || /\b(10[\s._-]?bit|hi10p?|main[\s._-]?10)\b/i.test(pool)) out.push('10-bit');
+    if (m.isHDR || m.isDV || /\b(hdr10\+?|hdr|dolby[\s._-]*vision)\b/i.test(pool)) out.push('HDR/Dolby Vision');
+    if (m.isAv1 || /\bav1\b/i.test(pool)) out.push('AV1');
+    if (/\bremux\b/i.test(pool)) out.push('Remux (bitrate troppo alto)');
+    if (/\b(dts(?:[\s._-]?hd)?(?:[\s._-]?ma)?|true[\s._-]?hd|atmos)\b/i.test(pool) ||
+        /^(DTS|TrueHD|Atmos)/i.test(m.audioCodec || '')) out.push('audio DTS/TrueHD/Atmos');
+    return out;
+}
+function isBrowserPlayable(item, uri) { return browserIncompatReasons(item, uri).length === 0; }
+
+/* ---- VLC handoff ---- */
+function vlcSafeName(item, uri) {
+    const base = (item && (item.displayTitle || item.cleanTitle || item.rawTitle)) ||
+        (typeof magnetDn === 'function' ? magnetDn(String(uri)) : '') || 'MirSeer';
+    return base.replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'MirSeer';
+}
+/* VLC non apre i magnet da solo: serve un URL http(s). Lo ricaviamo da TorrServer. */
+function vlcStreamUrl(uri, name) {
+    const base = String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(base)) return '';
+    return base + '/stream/' + encodeURIComponent(name) + '?link=' + encodeURIComponent(uri) + '&index=1&play';
+}
+/* MIRSEER-PREADD: aggiunge il torrent a TorrServer prima di aprire VLC */
+let seerVlcBusy = false;
+function seerPreAddTorrent(base, uri, name) {
+    return new Promise(resolve => {
+        if (typeof GM_xmlhttpRequest !== 'function') return resolve(false);
+        GM_xmlhttpRequest({
+            method: 'POST', url: base + '/torrents', timeout: 120000,
+            headers: { 'Content-Type': 'application/json' },
+            data: JSON.stringify({ action: 'add', link: uri, title: name, poster: '', save_to_db: false }),
+            onload: r => resolve(r.status >= 200 && r.status < 300),
+            onerror: () => resolve(false),
+            ontimeout: () => resolve(false)
+        });
+    });
+}
+async function triggerVlcHandoff(uri, item) {
+    if (!uri || !/^magnet:/i.test(String(uri)) || seerVlcBusy) return;
+    seerVlcBusy = true;
+    try {
+        const name = vlcSafeName(item, uri);
+        let url = vlcStreamUrl(uri, name);
+        if (!url) {
+            const ans = window.prompt(
+                'VLC non riproduce i magnet direttamente: serve un server di streaming (es. TorrServer).\n\n' +
+                'Inserisci l\'indirizzo di TorrServer (verra\' salvato):',
+                'http://127.0.0.1:8090');
+            if (ans && /^https?:\/\//i.test(ans.trim())) {
+                setPref(VLC_PREF_KEY, ans.trim());
+                url = vlcStreamUrl(uri, name);
+            }
+        }
+        let added = false;
+        if (url) {
+            const base = String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
+            toast('⏳ Preparo il torrent sul server…', '', 6000);
+            added = await seerPreAddTorrent(base, uri, name);
+        }
+        const entry = url || uri; /* senza server: playlist col magnet (funziona solo con plugin torrent) */
+        const m3u = '#EXTM3U\r\n#EXTINF:-1,' + name.replace(/,/g, ' ') + '\r\n' + entry + '\r\n';
+        const blobUrl = URL.createObjectURL(new Blob([m3u], { type: 'audio/x-mpegurl' }));
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = name + '.m3u';
+        a.dataset.seerTracked = '1';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+        if (item) { markSeen(item, true); trackDl(item, [uri], 'vlc'); }
+        if (!url) toast('⚠ Playlist con magnet: richiede un server di streaming per VLC', '', 4200);
+        else if (added) toast('▶ Torrent pronto: apri la playlist con VLC', 'ok', 4200);
+        else toast('⚠ Playlist scaricata, ma il server non ha confermato il torrent: VLC potrebbe metterci un po\'', '', 5200);
+    } finally {
+        seerVlcBusy = false;
+    }
+}
+function promptVlcFallback(uri, item, reason) {
+    seerStopPlayWatchdog();
+    closeTrailer(); /* chiude il player rotto (no-op se l'overlay e' gia' chiuso) */
+    const msg = (reason ? reason + '\n\n' : '') + 'Vuoi riprodurlo con VLC Media Player?';
+    if (window.confirm(msg)) triggerVlcHandoff(uri, item);
+}
+
+/* ---- watchdog Webtor ---- */
+let seerPlayWd = null;
+function seerStopPlayWatchdog() {
+    if (!seerPlayWd) return;
+    clearTimeout(seerPlayWd.timer);
+    window.removeEventListener('message', seerPlayWd.onMsg);
+    seerPlayWd = null;
+}
+/* MIRSEER-FIX-PATCH: embed originale (<video src=magnet>) + watchdog passivo */
+function seerStartPlayWatchdog(fr, token, uri, item) {
+    seerStopPlayWatchdog();
+    const wd = seerPlayWd = { ready: false, timer: 0, onMsg: null };
+    const fail = reason => { if (seerPlayWd === wd) promptVlcFallback(uri, item, reason); };
+    const arm = (ms, reason) => { clearTimeout(wd.timer); wd.timer = setTimeout(() => fail(reason), ms); };
+    wd.onMsg = e => {
+        const d = e.data;
+        if (!d || d.seerPlay !== token || e.source !== fr.contentWindow) return;
+        console.log('[MirSeer play]', d.kind, d.name, d.data);
+        if (d.kind === 'error') return fail('Il player nel browser ha segnalato un errore (TORRENT_ERROR).');
+        if (d.kind === 'fetched' && !wd.ready) return arm(PLAY_INIT_TIMEOUT_MS, 'Il player non si e\' avviato in tempo.');
+        if (d.kind === 'inited') { wd.ready = true; clearTimeout(wd.timer); return; }
+        if (d.kind === 'status' && wd.ready) {
+            if (/buffer|stall|wait/i.test(String(d.data || ''))) arm(PLAY_STALL_TIMEOUT_MS, 'La riproduzione si e\' bloccata (buffering continuo).');
+            else clearTimeout(wd.timer);
+        }
+    };
+    window.addEventListener('message', wd.onMsg);
+}
+
+/* ---- player Webtor (embed originale) ---- */
+const WEBTOR_URL = 'https://webtor.io/show?magnet=';
+const WEBTOR_SDK = 'https://cdn.jsdelivr.net/npm/@webtor/embed-sdk-js/dist/index.min.js';
+function openInWebtor(uri, item) {
+    if (!uri || !/^magnet:/i.test(String(uri))) return;
+    const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    $('seer-trailer-title').textContent = '🌐 ' + ((item && (item.cleanTitle || item.displayTitle)) || 'Webtor');
+    const yt = $('seer-trailer-yt');
+    yt.href = WEBTOR_URL + encodeURIComponent(uri);
+    yt.textContent = 'Apri su Webtor ↗';
+    /* mostra prima l'overlay: il player vuole dimensioni reali in pixel, non "100%" */
+    $('seer-trailer-overlay').style.display = 'flex';
+    const fr = $('seer-trailer-frame');
+    const r = fr.getBoundingClientRect();
+    const w = Math.max(320, Math.round(r.width)), h = Math.max(180, Math.round(r.height));
+    const token = 'sp' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const js = s => JSON.stringify(s).replace(/</g, '\\u003c');
+    /* listener passivo: inoltra al parent i messaggi {name,data} dell'SDK, senza toccare il player */
+    const spy = '(function(){var T=' + js(token) + ',P=window.parent;' +
+        'function send(k,n,d){try{P.postMessage({seerPlay:T,kind:k,name:n,data:d},"*")}catch(x){}}' +
+        'window.addEventListener("message",function(ev){var d=ev.data;' +
+        'if(typeof d==="string"){try{d=JSON.parse(d)}catch(x){return}}' +
+        'if(!d||typeof d!=="object"||!d.name)return;var n=String(d.name).toLowerCase();' +
+        'var k=n==="torrent error"?"error":n==="torrent fetched"?"fetched":n==="inited"?"inited":n==="player status"?"status":"other";' +
+        'send(k,n,d.data!=null&&typeof d.data!=="object"?String(d.data):"")});' +
+        'var s=document.createElement("script");s.src=' + js(WEBTOR_SDK) + ';s.charset="utf-8";s.async=true;' +
+        's.onerror=function(){send("error","sdk","")};document.body.appendChild(s);})();';
+    fr.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><style>' +
+        'html,body{margin:0;background:#000;overflow:hidden}iframe{border:0;display:block}' +
+        '</style></head><body>' +
+        '<video controls src="' + attr(uri) + '" width="' + w + '" height="' + h + '"></video>' +
+        '<script>' + spy + '<\/script></body></html>';
+    seerStartPlayWatchdog(fr, token, uri, item);
+    if (item) {
+        markSeen(item, true);
+        trackDl(item, [uri], 'webtor');
+    }
+}
+
+/* ---- router unico per i pulsanti Play ---- */
+/* MIRSEER-CHOICE-PATCH: scelta VLC / Browser a ogni Play */
+function seerAskPlayer(why, cb) {
+    const old = document.getElementById('seer-play-choice');
+    if (old) old.remove();
+    const rec = why.length ? 'vlc' : 'browser';
+    const ov = document.createElement('div');
+    ov.id = 'seer-play-choice';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);font-family:inherit';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#12141c;color:#fff;border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:22px;max-width:380px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.6)';
+    const h = document.createElement('div');
+    h.textContent = 'Come vuoi riprodurlo?';
+    h.style.cssText = 'font-size:17px;font-weight:700;margin-bottom:6px';
+    const p = document.createElement('div');
+    p.style.cssText = 'font-size:13px;opacity:.75;margin-bottom:16px;line-height:1.4';
+    p.textContent = why.length
+        ? 'Consigliato VLC: ' + why.join(', ') + '.'
+        : 'Nessun problema evidente nel titolo: il browser dovrebbe andare bene (non e\' garantito).';
+    const mk = (label, key) => {
+        const b = document.createElement('button');
+        b.textContent = label + (rec === key ? '  ★' : '');
+        b.style.cssText = 'display:block;width:100%;margin-top:8px;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);cursor:pointer;font-size:14px;font-weight:600;color:#fff;background:' +
+            (rec === key ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'rgba(255,255,255,.08)');
+        b.onclick = () => { ov.remove(); cb(key); };
+        return b;
+    };
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Annulla';
+    cancel.style.cssText = 'display:block;width:100%;margin-top:8px;padding:8px;border:0;background:none;color:#fff;opacity:.55;cursor:pointer;font-size:13px';
+    cancel.onclick = () => ov.remove();
+    ov.onclick = e => { if (e.target === ov) ov.remove(); };
+    box.append(h, p, mk('▶ Apri con VLC', 'vlc'), mk('🌐 Guarda nel browser', 'browser'), cancel);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+}
+function playRelease(uri, item) {
+    if (!uri || !/^magnet:/i.test(String(uri))) return;
+    seerAskPlayer(browserIncompatReasons(item, uri), choice => {
+        if (choice === 'vlc') triggerVlcHandoff(uri, item);
+        else openInWebtor(uri, item);
+    });
+}
 const magnetBtnLabel = () => settings.magnetAction === 'open'
     ? '<span>🧲</span> Apri Magnet nel Client Torrent'
     : '<span>📋</span> Copia Magnet Link negli Appunti';
@@ -4572,8 +4800,12 @@ async function ensureReleaseTs(item) {
 function renderMagnetUI(item) {
     const box = $('seer-magnet-box'), list = $('seer-magnet-list'), single = $('seer-copy-btn');
     const sendOne = $('seer-send-btn'), sendAll = $('seer-send-all-btn');
+    const webtorBtn = $('seer-webtor-btn');
     const mags = item.magnets || [];
     const tc = tcClient() !== 'off';
+    const isVideo = effKind(item) === 'video' || (!item.kind && VIDEO_TYPES.has(item.type));
+
+    if (webtorBtn) webtorBtn.style.display = (mags.length === 1 && isVideo) ? '' : 'none';
 
     sendOne.style.display = (tc && mags.length === 1) ? '' : 'none';
     if (tc && mags.length === 1) { sendOne.className = 'seer-action-btn'; sendOne.disabled = false; sendOne.innerHTML = sendBtnLabel(); }
@@ -4586,6 +4818,7 @@ function renderMagnetUI(item) {
         list.innerHTML = mags.map((m, i) =>
             `<div class="seer-magnet-item"><span class="seer-magnet-label" title="${esc(m.dn || '')}">${esc(m.label)}</span><span class="seer-swm" data-swi="${i}"></span>` +
             `<span style="display:flex; gap:6px; flex-shrink:0;">` +
+            (isVideo ? `<button class="seer-magnet-webtor" data-mwebtor="${i}" title="Riproduci: browser se compatibile, altrimenti VLC">▶ Play</button>` : '') +
             (tc ? `<button class="seer-magnet-copy" data-ms="${i}" title="Invia a ${esc(tcName())}">⬇️</button>` : '') +
             `<button class="seer-magnet-copy" data-mi="${i}">${magnetItemLabel()}</button></span></div>`
         ).join('');
@@ -4749,6 +4982,8 @@ async function openDetailModal(item, keepVersions = false) {
 function openTrailer(item) {
     if (!item || !item.trailer) return;
     const k = encodeURIComponent(item.trailer.key);
+    $('seer-trailer-frame').removeAttribute('srcdoc'); /* MIRSEER-WEBTOR-INLINE */
+    $('seer-trailer-yt').textContent = 'Apri su YouTube ↗';
     $('seer-trailer-title').textContent = '▶ ' + item.cleanTitle + ' — Trailer';
     $('seer-trailer-frame').src = `https://www.youtube-nocookie.com/embed/${k}?autoplay=1&rel=0`;
     $('seer-trailer-yt').href = `https://www.youtube.com/watch?v=${k}`;
@@ -4757,6 +4992,8 @@ function openTrailer(item) {
 function closeTrailer() {
     const ov = $('seer-trailer-overlay');
     if (!ov || ov.style.display !== 'flex') return;
+    if (typeof seerStopPlayWatchdog === 'function') seerStopPlayWatchdog(); /* MIRSEER-PLAY-PATCH */
+    $('seer-trailer-frame').removeAttribute('srcdoc'); /* MIRSEER-WEBTOR-INLINE: ferma il player */
     $('seer-trailer-frame').src = 'about:blank';
     ov.style.display = 'none';
 }
@@ -8168,6 +8405,7 @@ function init() {
                             <button class="seer-action-btn" id="seer-send-all-btn" style="display:none;"><span>⬇️</span> Invia Tutti</button>
                             <div class="seer-magnet-list" id="seer-magnet-list"></div>
                         </div>
+                        <button class="seer-action-btn seer-webtor-btn" id="seer-webtor-btn" style="display:none;"><span>▶</span> Play (Browser / VLC)</button>
                         <button class="seer-action-btn" id="seer-copy-btn"><span>📋</span> Copia Magnet Link negli Appunti</button>
                         <button class="seer-action-btn" id="seer-send-btn" style="display:none;"><span>⬇️</span> Invia al client torrent</button>
                     </div>
@@ -8306,6 +8544,22 @@ function init() {
                         <div class="seer-settings-status" id="seer-tc-status"></div>
                         <div class="seer-settings-actions">
                             <button class="seer-action-btn" id="seer-tc-test">🔌 Salva e testa connessione</button>
+                        </div>
+                    </section>
+                    <!-- MIRSEER-TS-SETTINGS -->
+                    <section class="seer-set-group">
+                        <h3 class="seer-set-group-title">▶ Streaming su VLC (TorrServer)</h3>
+                        <label class="seer-settings-label" for="seer-ts-url">Indirizzo TorrServer</label>
+                        <input type="text" class="seer-settings-input" id="seer-ts-url" placeholder="http://127.0.0.1:8090" autocomplete="off" spellcheck="false" />
+                        <p class="seer-settings-help">
+                            Usato dal pulsante Play › VLC: MirSeer scarica una playlist <code>.m3u</code> che punta a questo server.
+                            Puo' essere locale (<code>http://127.0.0.1:8090</code>), in LAN o remoto via Tailscale
+                            (es. <code>http://nome-server:8090</code> o <code>http://100.x.y.z:8090</code>).
+                            Il dispositivo su cui apri VLC deve poter raggiungere quell'indirizzo.
+                        </p>
+                        <div class="seer-settings-status" id="seer-ts-status"></div>
+                        <div class="seer-settings-actions">
+                            <button class="seer-action-btn" id="seer-ts-test">🔌 Salva e testa connessione</button>
                         </div>
                     </section>
                     <section class="seer-set-group">
@@ -8487,6 +8741,8 @@ function init() {
         sTcUrl.value = String(getPref('tcUrl', '') || '');
         sTcUser.value = tcUser();
         sTcPass.value = tcPass();
+        sTsUrl.value = String(getPref('vlcStreamBase', '') || '');
+        sTsStatus.textContent = ''; sTsStatus.className = 'seer-settings-status';
         sTcUrl.disabled = sTcUser.disabled = sTcPass.disabled = sTcTest.disabled = tcClient() === 'off';
         sTcStatus.textContent = '';
         sTcStatus.className = 'seer-settings-status';
@@ -8546,7 +8802,31 @@ function init() {
         sTcTest.disabled = tcClient() === 'off';
     };
 
-    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'follows', 'tvTrack', 'accent', 'accent2', 'density'];
+    /* MIRSEER-TS-SETTINGS */
+    const sTsUrl = $('seer-ts-url'), sTsStatus = $('seer-ts-status'), sTsTest = $('seer-ts-test');
+    const normTs = v => { v = String(v || '').trim().replace(/\/+$/, ''); if (v && !/^https?:\/\//i.test(v)) v = 'http://' + v; return v; };
+    const setTsStatus = (txt, cls = '') => { sTsStatus.textContent = txt; sTsStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
+    sTsUrl.onchange = () => { sTsUrl.value = normTs(sTsUrl.value); setPref('vlcStreamBase', sTsUrl.value); };
+    sTsTest.onclick = () => {
+        const base = normTs(sTsUrl.value);
+        sTsUrl.value = base;
+        setPref('vlcStreamBase', base);
+        if (!base) { setTsStatus('Indirizzo rimosso: il Play su VLC chiedera\' l\'indirizzo al primo uso.', ''); return; }
+        if (typeof GM_xmlhttpRequest !== 'function') { setTsStatus('Salvato (test non disponibile in questo gestore di userscript).', 'ok'); return; }
+        sTsTest.disabled = true;
+        setTsStatus('Connessione in corso…');
+        const done = (txt, cls) => { setTsStatus(txt, cls); sTsTest.disabled = false; };
+        GM_xmlhttpRequest({
+            method: 'GET', url: base + '/echo', timeout: 7000,
+            onload: r => (r.status >= 200 && r.status < 300)
+                ? done('✅ Server raggiungibile' + (r.responseText ? ': ' + String(r.responseText).trim().slice(0, 40) : ''), 'ok')
+                : done('❌ Risposta HTTP ' + r.status + ' (e\' davvero TorrServer?)', 'err'),
+            onerror: () => done('❌ Non raggiungibile: indirizzo errato, server spento, Tailscale disattivo o permesso @connect negato', 'err'),
+            ontimeout: () => done('❌ Timeout: il server non risponde', 'err')
+        });
+    };
+
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'vlcStreamBase', 'follows', 'tvTrack', 'accent', 'accent2', 'density'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
     $('seer-export-btn').onclick = () => {
@@ -8615,6 +8895,7 @@ function init() {
         if (SORT_MODES.includes(d.sortMode)) { sortMode = d.sortMode; setPref('sortMode', sortMode); $('seer-sort-select').value = sortMode; n++; }
         if (d.tcClient === 'off' || TC_NAMES[d.tcClient]) { setPref('tcClient', d.tcClient); n++; }
         if (isStr(d.tcUrl)) { setPref('tcUrl', d.tcUrl.trim()); n++; }
+        if (isStr(d.vlcStreamBase) && /^https?:\/\//i.test(d.vlcStreamBase.trim())) { setPref('vlcStreamBase', d.vlcStreamBase.trim()); n++; }
         if (isStr(d.tcUser)) { setPref('tcUser', d.tcUser); n++; }
         trSid = null;
 
@@ -8856,6 +9137,10 @@ function init() {
         if (ok) flash(btn, '<span>✅</span> Inviato!', back, 'copied');
         else btn.innerHTML = back;
     };
+    $('seer-webtor-btn').onclick = () => {
+        const mags = currentModalItem ? (currentModalItem.magnets || []) : [];
+        if (mags.length) playRelease(mags[0].uri, currentModalItem);
+    };
     $('seer-send-btn').onclick = () => {
         const mags = currentModalItem ? (currentModalItem.magnets || []) : [];
         if (mags.length) sendBusy($('seer-send-btn'), [mags[0].uri]);
@@ -8868,6 +9153,12 @@ function init() {
     $('seer-magnet-list').onclick = async e => {
         if (!currentModalItem) return;
         const mags = currentModalItem.magnets || [];
+        const w = e.target.closest('[data-mwebtor]');
+        if (w) {
+            const m = mags[parseInt(w.dataset.mwebtor, 10)];
+            if (m) playRelease(m.uri, currentModalItem);
+            return;
+        }
         const s = e.target.closest('[data-ms]');
         if (s) {
             const m = mags[parseInt(s.dataset.ms, 10)];
