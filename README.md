@@ -9,7 +9,7 @@
 [![Platform: phpBB](https://img.shields.io/badge/Platform-phpBB-B22222.svg?style=for-the-badge&logo=phpbb)](https://mircrew-releases.org)
 
 <p align="center">
-  Trasforma l'esperienza di navigazione forum in un'interfaccia VOD fluida, elegante e reattiva in stile Netflix/Prime Video, integrata direttamente nel tuo browser.
+  Trasforma l'esperienza di navigazione forum in un'interfaccia fluida, elegante e reattiva in stile Netflix/Prime Video, integrata direttamente nel tuo browser.
 </p>
 
 ---
@@ -94,13 +94,16 @@ https://github.com/user-attachments/assets/4c25fbce-26be-4b46-b6ed-f34381b01f0d
 
 ### 💡 Come funziona?
 
-I browser non supportano nativamente lo streaming torrent né formati video complessi (HEVC a 10-bit, audio lossless DTS/TrueHD, file 4K pesanti). 
+I browser web non supportano nativamente lo streaming torrent né i formati video e audio più avanzati (HEVC/H.265 a 10-bit, profili HDR/Dolby Vision, audio lossless DTS/TrueHD e file 4K ad alto bitrate).
 
-MirSeer supera questo limite interfacciandosi con **TorrServer**:
-1. Clicchi su **"▶ Play"** in MirSeer e scegli **VLC**.
-2. MirSeer ordina a TorrServer di avviare il buffering sequenziale in RAM del torrent.
-3. Viene generata e scaricata istantaneamente una playlist `.m3u`.
-4. **VLC si apre da solo** e riproduce il flusso video in streaming alla massima qualità.
+MirSeer supera questo limite analizzando la release e interfacciandosi con **TorrServer**:
+
+1. **Scelta intelligente o guidata:** Clicchi su **"▶ Play"** in MirSeer: lo script verifica i codec del file e ti consiglia il player migliore (VLC per la massima compatibilità o Browser tramite Webtor per formati leggeri compatibili).
+2. **Buffering sequenziale in RAM:** MirSeer registra il magnet su TorrServer, che contatta i seed e organizza lo scaricamento sequenziale dei blocchi video direttamente nella memoria RAM.
+3. **Avvio immediato in VLC:** Lo stream video generato da TorrServer viene inviato a VLC tramite la modalità che hai scelto nelle impostazioni:
+   * **⚡ Protocollo `vlc://` (Consigliato):** VLC si apre istantaneamente tramite protocol handler di sistema, **senza scaricare alcun file** sul computer e mantenendo pulita la cartella Download.
+   * **📄 Playlist `.m3u` (Alternativa universale):** Viene generata e aperta in automatico una playlist temporanea.
+4. **Massima qualità:** VLC riproduce il filmato in tempo reale al massimo della qualità originale, con pieno supporto a tutte le tracce audio, sottotitoli e capitoli.
 
 ---
 
@@ -110,6 +113,8 @@ MirSeer supera questo limite interfacciandosi con **TorrServer**:
 2. **TorrServer (MatriX)** in esecuzione ([Download da GitHub](https://github.com/YouROK/TorrServer/releases)).
 3. **MirSeer v1.4.6** (o superiore).
 
+> ⚠️ **Requisiti per lo Streaming fluido:**
+> Lo streaming tramite TorrServer si basa sulla rete P2P (BitTorrent). Affinché la riproduzione parta subito e senza scatti, **è indispensabile che la release abbia seed attivi**. Se un torrent ha 0 seed o pochissimi peer, il video non potrà caricarsi o andrà in continuo buffering. Per contenuti molto pesanti (4K/Remux) è richiesta anche una velocità di download adeguata.
 ---
 
 ### 🚀 Configurazione Passo-Passo
@@ -125,23 +130,54 @@ MirSeer supera questo limite interfacciandosi con **TorrServer**:
 
 > 💡 **Consiglio RAM:** Dalla dashboard web di TorrServer (`http://127.0.0.1:8090`), apri **Settings** e assegna alla cache di memoria **200 MB** o **500 MB** per eliminare ogni rischio di micro-scatti.
 
+---
+
 #### 2. Collegamento in MirSeer
 1. Apri MirSeer dal forum premendo il pulsante galleggiante viola.
 2. Clicca sull'icona delle impostazioni **⚙️** in alto a destra.
 3. Trova la sezione **"▶ Streaming su VLC (TorrServer)"**.
 4. Inserisci l'indirizzo di TorrServer (di default: `http://127.0.0.1:8090`).
-5. Clicca **"🔌 Salva e testa connessione"** fino a visualizzare l'esito positivo verde.
-*(Se Tampermonkey mostra una richiesta di connessione verso 127.0.0.1, clicca su **"Consenti sempre"**).*
+5. Clicca **"🔌 Salva e testa connessione"** fino a visualizzare l'esito positivo verde.  
+*(Se Tampermonkey mostra una richiesta di connessione verso `127.0.0.1`, clicca su **"Consenti sempre"**).*
 
-#### 3. Associazione file per l'apertura a 1 clic
-1. Avvia una riproduzione per scaricare il tuo primo file `.m3u`.
-2. Fai clic destro sul file scaricato ➔ **Apri con** ➔ Seleziona **VLC** e spunta **"Usa sempre questa app per aprire i file .m3u"**.
-3. Dalle opzioni download del browser, seleziona **"Apri sempre i file di questo tipo"**.
-*(In questo modo non dovrai più aprire i file manualmente: VLC si avvierà da solo).*
+---
+
+#### 3a. Metodo Consigliato: Protocollo Diretto `vlc://` (Zero file scaricati)
+*Ideale per evitare di accumulare decine di file nella cartella Download: il browser passa lo stream direttamente a VLC senza scaricare nulla sul PC.*
+
+1. Nelle impostazioni di MirSeer (**⚙️**), sotto la sezione TorrServer, imposta **Metodo di avvio VLC** su **`⚡ Protocollo vlc://`**.
+2. Abilita il riconoscimento dei link `vlc://` sul tuo sistema:
+
+   * **Windows (Configurazione Protocol Handler):**  
+     Spesso su Windows il protocollo `vlc://` non è abilitato di default. Se cliccando su Play non succede nulla, puoi attivarlo facilmente:
+     1. Scarica un gestore del protocollo per VLC da GitHub (https://github.com/northsea4/vlc-protocol/releases).
+     2. Incolla i fili scaricati direttamente nella cartella di installazione di VLC (di norma `C:\Programmi\VideoLAN\VLC`) ed esegui `vlc-protocol-register` come amministratore.
+     3. Al primo avvio dal browser, quando compare il pop-up *"Aprire VLC media player?"*, spunta **"Consenti sempre ad [indirizzo] di aprire questi tipi di link"** e premi **Apri**.
+
+   * **Linux:** Assicurati che lo schema URL sia associato a VLC digitando nel terminale:  
+     ```bash
+     xdg-mime default vlc.desktop x-scheme-handler/vlc
+     ```
+
+   * **macOS:** Il protocol handler viene registrato automaticamente all'installazione dell'applicazione VLC.
+
+---
+
+#### 3b. Metodo Alternativo: Playlist Temporanea `.m3u` (Compatibilità universale)
+*Usalo se non vuoi configurare il protocollo di sistema o se usi un browser che blocca i protocol handlers personalizzati.*
+
+1. Nelle impostazioni di MirSeer (**⚙️**), imposta **Metodo di avvio VLC** su **`📄 Playlist .m3u`**.
+2. Avvia una riproduzione per scaricare il tuo primo file `.m3u`.
+3. Associa l'estensione a VLC:
+   * **Windows/macOS:** Fai clic destro sul file scaricato ➔ **Apri con** ➔ Seleziona **VLC** e spunta **"Usa sempre questa app per aprire i file .m3u"**.
+4. Dalle opzioni download del browser (barra o cronologia download), fai clic destro sul file e seleziona **"Apri sempre i file di questo tipo"**.  
+*(Da questo momento in poi, appena cliccherai Play il file scaricato verrà aperto immediatamente in VLC in automatico).*
+
+---
 
 #### 4. Buona visione!
 1. Apri la scheda di un video e premi **"▶ Play (Browser / VLC)"** (oppure **"▶ Play"** sul singolo episodio desiderato).
-2. Nel menu rapido seleziona **"▶ Apri con VLC"**.
+2. Nel menu rapido seleziona **"▶ Apri con VLC"** (verrà usata la modalità scelta al punto 3; troverai comunque un tasto rapido **⇄** per usare al volo l'altro metodo).
 3. VLC si avvierà in pochi istanti con lo streaming pronto.
 
 ---
