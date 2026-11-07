@@ -81,17 +81,6 @@ Guarda qualsiasi release del forum in **streaming istantaneo alla massima qualit
 
 ---
 
-### 📹 Video Tutorial
-
-<!-- Sostituisci questo blocco con il tuo video (embed YouTube o file video) -->
-<div align="center">
-
-https://github.com/user-attachments/assets/4c25fbce-26be-4b46-b6ed-f34381b01f0d
-
-</div>
-
----
-
 ### 💡 Come funziona?
 
 I browser web non supportano nativamente lo streaming torrent né i formati video e audio più avanzati (HEVC/H.265 a 10-bit, profili HDR/Dolby Vision, audio lossless DTS/TrueHD e file 4K ad alto bitrate).
