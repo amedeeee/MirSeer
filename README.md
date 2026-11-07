@@ -86,9 +86,7 @@ Guarda qualsiasi release del forum in **streaming istantaneo alla massima qualit
 <!-- Sostituisci questo blocco con il tuo video (embed YouTube o file video) -->
 <div align="center">
 
-[![Video Tutorial MirSeer VLC](https://img.youtube.com/vi/TUO_ID_VIDEO/maxresdefault.jpg)](https://www.youtube.com/watch?v=TUO_ID_VIDEO)
-
-*Fai clic sull'anteprima per visualizzare il video tutorial passo-passo*
+https://github.com/user-attachments/assets/4c25fbce-26be-4b46-b6ed-f34381b01f0d
 
 </div>
 
