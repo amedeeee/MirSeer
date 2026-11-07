@@ -27,8 +27,8 @@
 ## 🖼️ Anteprima Interfaccia
 
 <div align="center">
-  <img src="assets/preview-home.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
-  <img src="assets/preview-modal.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+  <img src="preview-home.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+  <img src="preview-modal.png" alt="MirSeer UI Showcase" width="90%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
 </div>
 
 ---
