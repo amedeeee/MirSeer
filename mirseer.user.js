@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.5
+// @version      1.4.6
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
