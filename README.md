@@ -9,7 +9,7 @@
 [![Platform: phpBB](https://img.shields.io/badge/Platform-phpBB-B22222.svg?style=for-the-badge&logo=phpbb)](https://mircrew-releases.org)
 
 <p align="center">
-  Trasforma l'esperienza di navigazione forum in un'interfaccia fluida, elegante e reattiva in stile Netflix/Prime Video, integrata direttamente nel tuo browser.
+  Trasforma l'esperienza di navigazione forum in un'interfaccia fluida, elegante e reattiva in stile Netflix/Prime Video, integrata direttamente nel tuo browser (Desktop e Mobile).
 </p>
 
 ---
@@ -35,19 +35,29 @@
 
 ## ✨ Funzionalità Principali
 
-🎬 **Interfaccia Cinema (Lista, Griglia & Carosello)** Trasforma il forum in un vero e proprio catalogo in stile Netflix/Plex. Layout moderno con design Glassmorphism (disponibile in modalità Dark e Light con accenti cromatici personalizzabili), Hero Carousel dinamico per i titoli in tendenza e massima libertà di scelta tra la visualizzazione a lista classica o la Vista a Griglia a sole locandine.
+🎬 **Interfaccia Cinema & Home Personalizzabile**  
+Trasforma il forum in un catalogo moderno con design Glassmorphism (tema **Dark / Light**, densità **Comoda / Compatta** e colori d'accento personalizzabili), **Hero Carousel** dinamico per i titoli in tendenza e switch istantaneo tra **Vista Lista** e **Vista Griglia**. Dalle impostazioni puoi scegliere quali sezioni compongono la tua **Home** (Film, Serie TV, Documentari, Anime, Cartoni, ecc.).
 
-▶️ **Streaming Istantaneo (Webtor, VLC & TorrServer)** Guarda i contenuti video in streaming immediato senza attendere il download. Include un player Webtor integrato per la riproduzione diretta nel browser e il supporto a VLC tramite TorrServer per le release più impegnative (4K UHD, HEVC, 10-bit, HDR/Dolby Vision e audio lossless DTS/Atmos), assistito da un router intelligente e da un watchdog che rileva blocchi o errori di buffering.
+▶️ **Streaming su VLC via TorrServer & File Picker**  
+Guarda qualsiasi release in streaming istantaneo alla massima qualità originale (4K UHD, HEVC/H.265, 10-bit, HDR/Dolby Vision e audio lossless DTS/TrueHD/Atmos) direttamente su **VLC Media Player** tramite **TorrServer**. Supporta autenticazione HTTP Basic, selezione automatica del file video principale, **File Picker** interattivo per saghe o pack di serie TV (con avvio di singoli episodi o playlist completa), avvio via protocollo diretto `vlc://` o `.m3u`, copia automatica del link negli appunti e **Diagnostica Streaming** integrata.
 
-🍿 **Metadati Avanzati, Voti & Trailer (Integrazione TMDb)** Algoritmo intelligente che bypassa banner promozionali, userbar e firme dei releaser per estrarre i dati reali del post. Arricchisce ogni titolo con locandine HD, trame ufficiali in italiano da TMDb, valutazioni medie, generi e permette di riprodurre i Trailer YouTube in un player a comparsa senza mai uscire dalla pagina.
+🎭 **Cast, Regia & Filmography Explorer (TMDb)**  
+Nelle schede dettagli di Film e Serie TV compaiono le miniature circolari di regista e cast principale. Cliccando su un nome si apre il **Filmography Explorer** nativo con biografia e filmografia completa, abbinato a un **riscontro in tempo reale su MirCrew** per vedere subito quali titoli sono già disponibili sul forum (con badge dedicati, filtro *Solo su MirCrew* e apertura diretta).
 
-⬇️ **Automazione Torrent, WebUI & Invio Multiplo** Gestione granulare dei Magnet link per singoli episodi o intere stagioni. Oltre alla copia rapida negli appunti, puoi inviare i download con un clic a qBittorrent o Transmission, smistandoli automaticamente nelle tue cartelle di destinazione (es. `/Media/Film` o `/Media/SerieTV`). La modalità Selezione Multipla (Batch) consente di copiare o inviare decine di uscite contemporaneamente.
+⚖️ **Confronta Versioni & Raggruppamento Intelligente**  
+Tutte le release dello stesso titolo vengono raggruppate automaticamente sotto un'unica scheda tramite **ID TMDb** e matching intelligente (anche attraverso più pagine di ricerca e con titoli in lingue diverse). Il pannello **⚖️ Confronta Versioni** permette di analizzare fianco a fianco ogni variante leggendo il MediaInfo (risoluzione, bitrate reale o stimato, HDR/DV, tracce audio, sottotitoli e peso) con punteggio qualità `0–100` e badge automatici (**🏆 Best Quality**, **💡 Best Value**, **🪶 Più leggero**).
 
-📊 **Monitoraggio Swarm Live (Seed / Leech)** Visualizza in tempo reale lo stato di salute di ciascun torrent prima ancora di scaricarlo. Grazie all'interrogazione diretta dei tracker del forum, appositi badge cromatici mostrano con precisione il numero di seed, leech e completamenti attivi, segnalando tempestivamente le release senza fonti.
+⬇️ **Automazione Torrent, Selezione File qBittorrent & Batch**  
+Oltre alla copia o apertura rapida del magnet, puoi inviare i download con un clic a **qBittorrent** o **Transmission**, smistandoli automaticamente nelle cartelle di destinazione configurate per sezione o per singola serie TV. Su qBittorrent (v4.5+) puoi anche **selezionare i singoli file da scaricare** prima di avviare un pack, escludendo extra o file indesiderati. Con la **Selezione Multipla** gestisci decine di uscite in blocco.
 
-⭐ **Watchlist Intelligente & Tracciamento Serie** Salva i tuoi titoli preferiti e segui con un clic i tuoi Releaser di fiducia o le serie TV in corso. MirSeer rileva in automatico gli episodi che non hai ancora scaricato contrassegnandoli con il badge "🆕 Nuovo", mentre il marcatore visivo "Scaricato" (✓) e il database locale su IndexedDB mantengono ordinata la tua cronologia.
+📊 **Monitoraggio Swarm Live (Seed / Leech)**  
+Visualizza in tempo reale lo stato di salute di ciascun torrent prima di scaricarlo o riprodurlo: grazie all'interrogazione diretta dei tracker del forum, badge cromatici dedicati mostrano seed, leech e completamenti attivi.
 
-🔍 **Ricerca Universale, Filtri Rapidi & Statistiche** Motore di ricerca rapido con correzione fuzzy e supporto scorciatoie da tastiera (`/`, `Ctrl+K`, `j`/`k`). Isola qualsiasi contenuto con i filtri rapidi (4K UHD, 1080p, HDR/DV, Audio ITA, Stagioni complete, genere, anno e codec), con accesso a una dashboard statistica personale che analizza lo spazio scaricato e i tuoi formati preferiti.
+⭐ **Watchlist, Releasers & Account**  
+Salva i tuoi titoli preferiti, segui i tuoi **Releaser** di fiducia (con classifica, statistiche e caricamento diretto delle loro pagine `/releaser/`) o le **serie TV** in corso: MirSeer rileva gli episodi non ancora scaricati segnalandoli con `🆕`. Include inoltre il pannello **Il mio account** con profilo, cronologia download e statistiche personali, oltre a **Backup & Ripristino** JSON (con protezione opzionale delle credenziali).
+
+📱 **Ottimizzazione Mobile & Scorciatoie da Tastiera**  
+Interfaccia responsive riprogettata per smartphone con modale a scorrimento unico, tasto Indietro integrato, swipe sull'Hero e sulle schede, e selezione multipla tramite pressione prolungata. Da desktop sono disponibili scorciatoie rapide (`/`, `Ctrl+K`, `j`/`k`, `f`, `d`, `x`, `←`/`→`).
 
 ---
 
@@ -61,7 +71,7 @@ Scegli e installa l'estensione browser supportata in base al tuo sistema:
 | **Google Chrome / Brave** | Tampermonkey | [Chrome Web Store](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo) |
 | **Mozilla Firefox** | Tampermonkey | [Firefox Add-ons](https://addons.mozilla.org/it/firefox/addon/tampermonkey/) |
 | **Microsoft Edge** | Tampermonkey | [Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd) |
-| **Android (Kiwi / Firefox)** | Tampermonkey | Installabile dallo store del rispettivo browser |
+| **Mobile (Android)** | Tampermonkey | Firefox Mobile / Edge / Lemur / Kiwi Browser |
 
 ### Passo 2: Installa lo Script
 1. Clicca sul pulsante verde: **[INSTALLA MIRSEER ORA](https://raw.githubusercontent.com/amedeeee/MirSeer/main/mirseer.user.js)**
@@ -70,40 +80,39 @@ Scegli e installa l'estensione browser supportata in base al tuo sistema:
 
 ### Passo 3: Utilizzo
 1. Vai su [mircrew-releases.org](https://mircrew-releases.org) ed effettua l'accesso col tuo account.
-2. In basso a destra comparirà il pulsante galleggiante circolare **🔮 MirSeer**.
+2. In basso a destra comparirà il pulsante galleggiante **MirSeer**.
 3. Cliccaci sopra per aprire l'interfaccia catalogo.
 
 ---
 
 ## 🍿 Guida allo Streaming con VLC & TorrServer
 
-Guarda qualsiasi release del forum in **streaming istantaneo alla massima qualità originale** (4K UHD, HDR, Dolby Vision, tracce audio DTS/Atmos) su **VLC Media Player**, senza attendere il completamento del download nel client torrent.
+Guarda qualsiasi release del forum in **streaming istantaneo alla massima qualità originale** (4K UHD, HDR, Dolby Vision, tracce audio DTS/TrueHD/Atmos) su **VLC Media Player**, senza attendere il completamento del download nel client torrent.
 
 ---
 
 ### 💡 Come funziona?
 
-I browser web non supportano nativamente lo streaming torrent né i formati video e audio più avanzati (HEVC/H.265 a 10-bit, profili HDR/Dolby Vision, audio lossless DTS/TrueHD e file 4K ad alto bitrate).
+I browser web non supportano nativamente il protocollo BitTorrent né i codec video e audio più avanzati (HEVC/H.265 a 10-bit, Dolby Vision, audio AC3/E-AC3/DTS/TrueHD). MirSeer si interfaccia direttamente con **TorrServer** per offrire un'esperienza fluida:
 
-MirSeer supera questo limite analizzando la release e interfacciandosi con **TorrServer**:
-
-1. **Scelta intelligente o guidata:** Clicchi su **"▶ Play"** in MirSeer: lo script verifica i codec del file e ti consiglia il player migliore (VLC per la massima compatibilità o Browser tramite Webtor per formati leggeri compatibili).
-2. **Buffering sequenziale in RAM:** MirSeer registra il magnet su TorrServer, che contatta i seed e organizza lo scaricamento sequenziale dei blocchi video direttamente nella memoria RAM.
-3. **Avvio immediato in VLC:** Lo stream video generato da TorrServer viene inviato a VLC tramite la modalità che hai scelto nelle impostazioni:
-   * **⚡ Protocollo `vlc://` (Consigliato):** VLC si apre istantaneamente tramite protocol handler di sistema, **senza scaricare alcun file** sul computer e mantenendo pulita la cartella Download.
-   * **📄 Playlist `.m3u` (Alternativa universale):** Viene generata e aperta in automatico una playlist temporanea.
-4. **Massima qualità:** VLC riproduce il filmato in tempo reale al massimo della qualità originale, con pieno supporto a tutte le tracce audio, sottotitoli e capitoli.
+1. **Preparazione & Metadati:** Cliccando su **`▶ Play`**, MirSeer aggiunge il magnet a TorrServer e attende i metadati dai peer (mostrando l'avanzamento a schermo).
+2. **Selezione automatica o File Picker:** Se il torrent contiene un solo video (o un film con file extra), MirSeer seleziona automaticamente il file video principale; se contiene più video (saghe, pack serie TV), apre il **File Picker** per scegliere esattamente quale file o episodio riprodurre oppure esportare l'intera playlist in VLC.
+3. **Avvio immediato in VLC:** Lo stream viene passato a VLC nella modalità attiva:
+   * **⚡ Protocollo `vlc://` (Predefinito su Desktop):** VLC si apre tramite protocol handler di sistema **senza scaricare alcun file `.m3u`**.
+   * **📄 Playlist `.m3u` (Alternativa universale / Automatica su Mobile):** Viene generata e scaricata una playlist temporanea da aprire con VLC.
+   * *In entrambi i casi, il link di streaming viene copiato automaticamente anche negli appunti per poterlo incollare al volo in VLC (`Apri flusso di rete › Incolla`).*
 
 ---
 
 ### 🛠️ Requisiti
 
-1. **VLC Media Player** installato sul sistema ([videolan.org](https://www.videolan.org/vlc/)).
+1. **VLC Media Player** installato sul dispositivo ([videolan.org](https://www.videolan.org/vlc/)).
 2. **TorrServer (MatriX)** in esecuzione ([Download da GitHub](https://github.com/YouROK/TorrServer/releases)).
-3. **MirSeer v1.4.6** (o superiore).
+3. **MirSeer v1.4.8** (o superiore).
 
-> ⚠️ **Requisiti per lo Streaming fluido:**
-> Lo streaming tramite TorrServer si basa sulla rete P2P (BitTorrent). Affinché la riproduzione parta subito e senza scatti, **è indispensabile che la release abbia seed attivi**. Se un torrent ha 0 seed o pochissimi peer, il video non potrà caricarsi o andrà in continuo buffering. Per contenuti molto pesanti (4K/Remux) è richiesta anche una velocità di download adeguata.
+> ⚠️ **Requisiti per lo Streaming fluido:**  
+> Lo streaming tramite TorrServer si basa sulla rete P2P (BitTorrent). Affinché la riproduzione parta rapidamente e senza scatti, **è indispensabile che la release abbia seed attivi**. Se un torrent ha 0 seed o pochissimi peer, il video non potrà caricarsi o andrà in buffering continuo. Per contenuti 4K/Remux ad alto bitrate è necessaria anche una connessione adeguata.
+
 ---
 
 ### 🚀 Configurazione Passo-Passo
@@ -111,36 +120,37 @@ MirSeer supera questo limite analizzando la release e interfacciandosi con **Tor
 #### 1. Scaricare e avviare TorrServer
 1. Vai sulle release di **[TorrServer MatriX](https://github.com/YouROK/TorrServer/releases)**.
 2. Scarica il file per il tuo sistema operativo:
-   * **Windows:** `TorrServer-windows-amd64.exe` (rinominalo in `TorrServer.exe`).
+   * **Windows:** `TorrServer-windows-amd64.exe` (puoi rinominarlo in `TorrServer.exe`).
    * **macOS:** `TorrServer-darwin-amd64` (o `arm64` per Apple Silicon).
    * **Linux / NAS:** binario corrispondente o container Docker.
-3. Posizionalo in una cartella a piacere ed **eseguilo** (lascia la finestra aperta in background).
+3. Posizionalo in una cartella a piacere ed **eseguilo** (lascia la finestra/servizio attivo in background).
 4. Verifica che funzioni aprendo nel browser l'indirizzo: `http://127.0.0.1:8090`.
 
-> 💡 **Consiglio RAM:** Dalla dashboard web di TorrServer (`http://127.0.0.1:8090`), apri **Settings** e assegna alla cache di memoria **200 MB** o **500 MB** per eliminare ogni rischio di micro-scatti.
+> 💡 **Consiglio RAM:** Dalla dashboard web di TorrServer (`http://127.0.0.1:8090`), apri **Settings** e assegna alla cache di memoria **200 MB** o **500 MB** per ridurre al minimo il rischio di micro-scatti.
 
 ---
 
 #### 2. Collegamento in MirSeer
-1. Apri MirSeer dal forum premendo il pulsante galleggiante viola.
+1. Apri MirSeer dal forum premendo il pulsante galleggiante.
 2. Clicca sull'icona delle impostazioni **⚙️** in alto a destra.
 3. Trova la sezione **"▶ Streaming su VLC (TorrServer)"**.
-4. Inserisci l'indirizzo di TorrServer (di default: `http://127.0.0.1:8090`).
-5. Clicca **"🔌 Salva e testa connessione"** fino a visualizzare l'esito positivo verde.  
-*(Se Tampermonkey mostra una richiesta di connessione verso `127.0.0.1`, clicca su **"Consenti sempre"**).*
+4. Inserisci l'indirizzo di TorrServer (es. `http://127.0.0.1:8090` in locale, oppure l'IP LAN / Tailscale del server se usi un altro dispositivo).
+5. *(Opzionale)* Se il tuo TorrServer ha l'autenticazione attiva, compila i campi **Utente TorrServer** e **Password TorrServer**.
+6. Clicca **"🔌 Salva e testa connessione"** fino a visualizzare l'esito positivo verde.  
+*(Se Tampermonkey mostra un avviso di connessione verso l'indirizzo inserito, clicca su **"Consenti sempre"**).*
 
 ---
 
-#### 3a. Metodo Consigliato: Protocollo Diretto `vlc://` (Zero file scaricati)
-*Ideale per evitare di accumulare decine di file nella cartella Download: il browser passa lo stream direttamente a VLC senza scaricare nulla sul PC.*
+#### 3a. Metodo Consigliato su Desktop: Protocollo Diretto `vlc://` (Zero file scaricati)
+*Ideale su PC per evitare di accumulare file nella cartella Download.*
 
 1. Nelle impostazioni di MirSeer (**⚙️**), sotto la sezione TorrServer, imposta **Metodo di avvio VLC** su **`⚡ Protocollo vlc://`**.
 2. Abilita il riconoscimento dei link `vlc://` sul tuo sistema:
 
    * **Windows (Configurazione Protocol Handler):**  
-     Spesso su Windows il protocollo `vlc://` non è abilitato di default. Se cliccando su Play non succede nulla, puoi attivarlo facilmente:
-     1. Scarica un gestore del protocollo per VLC da GitHub (https://github.com/northsea4/vlc-protocol/releases).
-     2. Incolla i fili scaricati direttamente nella cartella di installazione di VLC (di norma `C:\Programmi\VideoLAN\VLC`) ed esegui `vlc-protocol-register` come amministratore.
+     Su Windows il protocollo `vlc://` non è sempre abilitato di default. Se cliccando su Play non si apre VLC:
+     1. Scarica un gestore del protocollo per VLC da GitHub ([vlc-protocol](https://github.com/northsea4/vlc-protocol/releases)).
+     2. Estrai i file scaricati nella cartella di installazione di VLC (di norma `C:\Programmi\VideoLAN\VLC`) ed esegui `vlc-protocol-register` come amministratore.
      3. Al primo avvio dal browser, quando compare il pop-up *"Aprire VLC media player?"*, spunta **"Consenti sempre ad [indirizzo] di aprire questi tipi di link"** e premi **Apri**.
 
    * **Linux:** Assicurati che lo schema URL sia associato a VLC digitando nel terminale:  
@@ -148,37 +158,43 @@ MirSeer supera questo limite analizzando la release e interfacciandosi con **Tor
      xdg-mime default vlc.desktop x-scheme-handler/vlc
      ```
 
-   * **macOS:** Il protocol handler viene registrato automaticamente all'installazione dell'applicazione VLC.
+   * **macOS:** Il protocol handler viene generalmente gestito automaticamente dall'applicazione VLC.
 
 ---
 
-#### 3b. Metodo Alternativo: Playlist Temporanea `.m3u` (Compatibilità universale)
-*Usalo se non vuoi configurare il protocollo di sistema o se usi un browser che blocca i protocol handlers personalizzati.*
+#### 3b. Metodo Alternativo (e Automatico su Mobile): Playlist `.m3u`
+*Consigliato se non vuoi configurare il protocollo di sistema o su smartphone/tablet (dove viene selezionato automaticamente).*
 
-1. Nelle impostazioni di MirSeer (**⚙️**), imposta **Metodo di avvio VLC** su **`📄 Playlist .m3u`**.
-2. Avvia una riproduzione per scaricare il tuo primo file `.m3u`.
+1. Su Desktop, imposta **Metodo di avvio VLC** su **`📄 Playlist .m3u`** nelle impostazioni (**⚙️**).
+2. Avvia una riproduzione per scaricare il primo file `.m3u`.
 3. Associa l'estensione a VLC:
    * **Windows/macOS:** Fai clic destro sul file scaricato ➔ **Apri con** ➔ Seleziona **VLC** e spunta **"Usa sempre questa app per aprire i file .m3u"**.
-4. Dalle opzioni download del browser (barra o cronologia download), fai clic destro sul file e seleziona **"Apri sempre i file di questo tipo"**.  
-*(Da questo momento in poi, appena cliccherai Play il file scaricato verrà aperto immediatamente in VLC in automatico).*
+   * **Browser Desktop:** Dalle opzioni dei download, seleziona **"Apri sempre i file di questo tipo"**.
+   * **Smartphone:** Apri il file `.m3u` scaricato scegliendo **VLC**, oppure apri VLC ➔ **Altro / Rete** ➔ **Apri flusso di rete** e incolla l'URL già copiato negli appunti da MirSeer.
 
 ---
 
-#### 4. Buona visione!
-1. Apri la scheda di un video e premi **"▶ Play (Browser / VLC)"** (oppure **"▶ Play"** sul singolo episodio desiderato).
-2. Nel menu rapido seleziona **"▶ Apri con VLC"** (verrà usata la modalità scelta al punto 3; troverai comunque un tasto rapido **⇄** per usare al volo l'altro metodo).
-3. VLC si avvierà in pochi istanti con lo streaming pronto.
+#### 4. Buona visione e Diagnostica
+1. Apri la scheda di un video e premi **`▶ Play`** (oppure **`▶ Play`** sul singolo episodio desiderato).
+2. Attendi l'eventuale caricamento dei metadati del torrent (se l'attesa supera i 3,5 secondi comparirà il tasto di conferma **`▶ Apri in VLC`**).
+3. Se VLC dovesse mostrare un errore, clicca sul chip **`🔬 VLC dà errore? Diagnostica`** che compare in basso per eseguire un controllo completo (raggiungibilità del server, login, peer attivi, verifica reale del flusso video e report copiabile).
 
 ---
 
-## ⚙️ Configurazione TMDb (Opzionale)
+## ⚙️ Configurazione TMDb (Consigliata)
 
-MirSeer funziona nativamente senza chiavi esterne. Tuttavia, per abilitare i fondali ad alta risoluzione (Backdrop) e il recupero automatico della trama originale nei topic più datati, puoi inserire una API Key gratuita di TheMovieDatabase (TMDb):
+MirSeer funziona anche senza chiavi esterne estraendo locandine e trame direttamente dai post. Inserendo una **API Key gratuita di TheMovieDatabase (TMDb)** si attivano però tutte le funzioni avanzate:
 
+- Locandine HD e fondali (Backdrop) nell'Hero e nelle schede
+- Trame ufficiali in italiano, valutazioni medie, generi e **Trailer YouTube**
+- **Bolle Cast & Regia** e **Filmography Explorer** con riscontro su MirCrew
+- **Raggruppamento versioni tramite ID TMDb** e filtri avanzati per voto/genere
+
+**Come attivarla:**
 1. Registra un account gratuito su [TheMovieDatabase (TMDb)](https://www.themoviedb.org/).
-2. Vai su **Impostazioni > API** e genera una chiave personale (*API v3 auth*).
-3. Apri la schermata impostazioni di MirSeer cliccando sull'icona ingranaggio ⚙️ dentro il catalogo.
-4. Incolla la tua chiave nel campo **TMDb API Key** e clicca **Salva**.
+2. Vai su **Impostazioni > API** e genera una chiave personale (*API Key v3*).
+3. Apri le impostazioni di MirSeer (**⚙️**) dentro il catalogo.
+4. Incolla la tua chiave nel campo **TMDb API Key** e clicca **💾 Salva**.
 
 ---
 
@@ -186,12 +202,12 @@ MirSeer funziona nativamente senza chiavi esterne. Tuttavia, per abilitare i fon
 
 <details>
 <summary><b>Lo script rallenta o non estrae le copertine.</b></summary>
-Verifica che le estensioni AdBlocker (uBlock Origin, AdGuard) o firewall DNS (Pi-hole) non stiano bloccando host di immagini esterni (es. Postimages, ImgBB, TurboImageHost) spesso usati dai releaser.
+Verifica che estensioni AdBlocker (uBlock Origin, AdGuard) o DNS filtranti (Pi-hole) non stiano bloccando host di immagini esterni spesso usati dai releaser (es. Postimages, ImgBB, TurboImageHost) o il dominio <code>image.tmdb.org</code>.
 </details>
 
 <details>
 <summary><b>MirSeer funziona da smartphone?</b></summary>
-Sì! È sufficiente usare un browser mobile con supporto alle estensioni Chrome/Firefox come <b>Kiwi Browser</b> o <b>Firefox Mobile Nightly</b> con Tampermonkey installato.
+Sì! L'interfaccia è ottimizzata per schermi touch e smartphone. È sufficiente usare un browser mobile Android con supporto alle estensioni (es. <b>Firefox Mobile</b>, <b>Microsoft Edge</b>, <b>Lemur Browser</b> o <b>Kiwi Browser</b>) con Tampermonkey o Violentmonkey installato.
 </details>
 
 <details>
@@ -200,18 +216,18 @@ Lo script si aggiorna in automatico in background ogni 24 ore. Per forzare l'agg
 </details>
 
 <details>
-<summary><b>VLC non si avvia o mostra errori di rete?</b></summary>
-Verifica che TorrServer sia aperto in background e che il firewall del sistema operativo (o l'antivirus) non stia bloccando la porta <code>8090</code>. Esegui nuovamente il test di connessione nelle impostazioni di MirSeer per verificare che risponda correttamente.
+<summary><b>VLC non si avvia o mostra errori di riproduzione?</b></summary>
+Dopo aver premuto <code>▶ Play</code>, usa il pulsante <b>🔬 VLC dà errore? Diagnostica</b> che compare sullo schermo: controllerà automaticamente se TorrServer è raggiungibile, se servono credenziali, quanti peer/seed rispondono e se il flusso video parte correttamente. Ricorda inoltre che l'URL viene copiato automaticamente negli appunti, quindi puoi sempre aprire VLC e usare <i>Apri flusso di rete › Incolla</i>.
 </details>
 
 <details>
 <summary><b>Il video va a scatti o si interrompe?</b></summary>
-Controlla il badge dei seed in MirSeer: un torrent privo di fonti sufficienti non può garantire uno streaming fluido. In alternativa, metti in pausa VLC per qualche secondo all'avvio per permettere a TorrServer di riempire il buffer in memoria RAM.
+Controlla i badge seed/leech nella scheda della release: un torrent senza seed sufficienti non può garantire uno streaming fluido. In alternativa, metti in pausa VLC per qualche secondo all'avvio per permettere a TorrServer di riempire il buffer in memoria RAM.
 </details>
 
 <details>
-<summary><b>Funziona anche su rete locale o verso TV?</b></summary>
-Sì! Eseguendo TorrServer su un server locale o NAS (es. <code>http://192.168.1.50:8090</code> o tramite Tailscale), il file <code>.m3u</code> generato da MirSeer sarà riproducibile da qualsiasi dispositivo dotato di VLC connesso alla medesima rete.
+<summary><b>Posso usarlo da un altro dispositivo (es. da telefono verso PC/NAS o tramite Tailscale)?</b></summary>
+Sì! Avvia TorrServer sul PC, server o NAS e inserisci nelle impostazioni di MirSeer sul telefono l'indirizzo di rete del server (es. <code>http://192.168.1.50:8090</code> in LAN oppure l'IP/hostname Tailscale) invece di <code>127.0.0.1</code>.
 </details>
 
 ---
