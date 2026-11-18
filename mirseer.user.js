@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.7
+// @version      1.4.8
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -461,6 +461,7 @@ seerCss(`
 }
 @media (prefers-reduced-motion: reduce) {
     .seer-hero-slide { transition: none; }
+    #mirseer-app *, #mirseer-app *::before, #mirseer-app *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 `);
 
@@ -1185,8 +1186,12 @@ function pureCore() {
         return null;
     }
 
+    /* MIRSEER-TITLEFIX-PATCH: "La quinta stagione", "Una stagione all'inferno" sono titoli di film, non stagioni.
+       La parola "stagione" viene protetta con un soft-hyphen invisibile (che non combacia con nessuna regex di stagione)
+       e rimossa solo alla fine, quando il titolo e' gia' pulito. */
+    const TITLE_STAGIONE_RE = /^(\s*(?:\[[^\]]*\]\s*)?(?:la|il|lo|le|gli|un|una|l['\u2019])\s*(?:(?:prima|seconda|terza|quarta|quinta|sesta|settima|ottava|nona|decima|ultima|nuova)[\s._]+)?)(stagione)\b(?![\s._]*(?:\d|complet|in[\s._]*corso))/i;
     function parseReleaseInfo(rawTitle) {
-        const raw = rawTitle.trim();
+        const raw = rawTitle.trim().replace(TITLE_STAGIONE_RE, (m, head, w) => head + w.slice(0, 5) + '\u00AD' + w.slice(5));
 
         const is4k = /\b(4k|2160p|uhd)\b/i.test(raw);
         const is1080p = /\b(1080p|1080i|fhd)\b/i.test(raw);
@@ -1290,7 +1295,7 @@ function pureCore() {
             .replace(/\s{2,}/g, ' ')
             .trim();
 
-        const baseTitle = clean || raw;
+        const baseTitle = (clean || raw).replace(/\u00AD/g, '');
         const yearTag = (year && !new RegExp('(?:^|\\D)' + year + '(?!\\d)').test(baseTitle)) ? ' (' + year + ')' : '';
         const displayTitle = (isTvSeries && season) ? `${baseTitle}${yearTag} – ${season.label}` : baseTitle + yearTag;
 
@@ -1424,6 +1429,7 @@ function getWorker() {
         const src = '(function(){var core=(' + pureCore.toString() + ')();' + WORKER_BODY + '})();';
         const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
         worker = new Worker(url);
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 30000);
         worker.onmessage = e => {
             const p = wPending.get(e.data.id);
             if (!p) return;
@@ -1543,13 +1549,28 @@ function flushIdb() {
     if (!idbSettled) { cacheLoad(); scheduleIdbFlush(); return; }
     if (!idbDb) { wQueue.clear(); dQueue.clear(); return; }
     if (!wQueue.size && !dQueue.size) return;
-    try {
-        const st = idbDb.transaction(CACHE_STORE, 'readwrite').objectStore(CACHE_STORE);
-        wQueue.forEach((v, k) => st.put(v, k));
-        dQueue.forEach(k => st.delete(k));
-    } catch (e) { console.warn('IndexedDB write failed', e); }
+    const w = [...wQueue], d = [...dQueue];
     wQueue.clear();
     dQueue.clear();
+    let failed = false;
+    const requeue = why => {
+        if (failed) return;
+        failed = true;
+        console.warn('IndexedDB write failed', why);
+        if ((flushIdb.fails = (flushIdb.fails || 0) + 1) > 3) return;
+        w.forEach(([k, v]) => { if (!wQueue.has(k) && !dQueue.has(k)) wQueue.set(k, v); });
+        d.forEach(k => { if (!wQueue.has(k) && !dQueue.has(k)) dQueue.add(k); });
+        scheduleIdbFlush();
+    };
+    try {
+        const tx = idbDb.transaction(CACHE_STORE, 'readwrite');
+        const st = tx.objectStore(CACHE_STORE);
+        tx.oncomplete = () => { flushIdb.fails = 0; };
+        tx.onerror = () => requeue(tx.error);
+        tx.onabort = () => requeue(tx.error);
+        w.forEach(([k, v]) => st.put(v, k));
+        d.forEach(k => st.delete(k));
+    } catch (e) { requeue(e); }
 }
 
 function cacheSet(k, v) {
@@ -1620,12 +1641,37 @@ const saveTheme = t => setPref('theme', t);
 const getTmdbKey = () => String(getPref('tmdb_api_key', '') || '').trim();
 const setTmdbKey = k => setPref('tmdb_api_key', String(k || '').trim());
 
+/* MIRSEER-HOMESEC-PATCH: sezioni che compongono la Home (escluse Progetti e Collezioni) */
+function homeSecCandidates() { return sectionList.filter(x => x.fid && !x.sub && x.name !== PROJECT_SECTION); }
+function normHomeSections(v) {
+    const ok = new Set(homeSecCandidates().map(x => x.name));
+    const a = [...new Set(Array.isArray(v) ? v.filter(n => ok.has(n)) : [])];
+    return a.length ? a : ['Film', 'Serie TV'];
+}
+function homeSecDefs() {
+    const want = new Set(settings.homeSections);
+    return homeSecCandidates().filter(x => want.has(x.name));
+}
+const homeSecIsStd = x => x.fid === FILM_FORUM_ID || x.fid === SERIES_FORUM_ID;
+let homeApplyTimer = null;
+function applyHomeSections(list) {
+    settings.homeSections = normHomeSections(list);
+    setPref('homeSections', settings.homeSections);
+    main.items = []; main.group = null; main.loaded = false; main.exhausted = false; main.bg = null; main.starting = null;
+    pageCache.clear();
+    spool.key = ''; spool.pages = new Map();
+    PG.key = '';
+    clearTimeout(homeApplyTimer);
+    homeApplyTimer = setTimeout(() => { if (view.key === 'home') setView('home'); }, 500);
+}
+
 const HERO_SPEEDS = [5000, 10000, 0];
 const SORT_MODES = ['recent', 'activity', 'views', 'title', 'replies', 'size'];
 const settings = {
     heroEnabled: !!getPref('heroEnabled', true),
     heroSpeed: (v => (HERO_SPEEDS.includes(v) ? v : 5000))(Number(getPref('heroSpeed', IS_COARSE ? 0 : 5000))),
     startView: String(getPref('startView', 'home')),
+    homeSections: normHomeSections(getPref('homeSections', null)),
     density: getPref('density', 'comfortable') === 'compact' ? 'compact' : 'comfortable',
     accent: String(getPref('accent', '#6366f1')),
     accent2: String(getPref('accent2', '#a855f7')),
@@ -1812,7 +1858,7 @@ const snapshot = it => ({
     thanksUrl: it.thanksUrl || null, extId: it.extId || null, kind: it.kind || 'video',
     origTitle: it.origTitle || null, fieldYear: it.fieldYear || null, genre: it.genre || null, country: it.country || null,
     tmdbTitle: it.tmdbTitle || null, tmdbYear: it.tmdbYear || null, synTm: it.synTm || null,
-    tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null,
+    tmdbId: it.tmdbId || null, tmdbKind: it.tmdbKind || null, vote: it.vote || null, tmV: 3,
     genres: it.genres || [], trailer: it.trailer || null, imdbId: it.imdbId || null,
     mediaInfo: it.mediaInfo || null,
     sizeBytes: it.sizeBytes || 0,
@@ -1849,6 +1895,11 @@ function readCache(id, item = null) {
         cacheDel(CACHE_PREFIX + id);
         return null;
     }
+    if (hit && item && hit.kind === 'video' && !hit.tmdbId && hit.tmV !== 3 && getTmdbKey() && !isProjLike(item) && (!hit.tmdbId || (hit.tmdbKind === 'tv' && tmdbSeasonNeed(item) > 1))) {
+        resolvedMem.delete(String(id));
+        cacheDel(CACHE_PREFIX + id);
+        return null;
+    }
     if (hit) {
         if (item && isProjLike(item) && !hit.poster) {
             resolvedMem.delete(String(id));
@@ -1862,6 +1913,7 @@ function readCache(id, item = null) {
     if (!raw) return null;
     let p;
     try { p = JSON.parse(raw); } catch (e) { return null; }
+    if (item && p.kind === 'video' && !p.tmdbId && p.tmV !== 3 && getTmdbKey() && !isProjLike(item) && (!p.tmdbId || (p.tmdbKind === 'tv' && tmdbSeasonNeed(item) > 1))) { cacheDel(CACHE_PREFIX + id); return null; }
     if (item && item._fromProject && !p.realTitle) { cacheDel(CACHE_PREFIX + id); return null; }
     if (item && isProjLike(item) && !p.poster) {
         cacheDel(CACHE_PREFIX + id);
@@ -1911,11 +1963,23 @@ function parseEpisodeRef(text) {
 function magnetLabel(ref, idx) {
     const pad = v => String(v).padStart(2, '0');
     if (ref && ref.ep != null) {
-        const ep = `Episodio ${pad(ref.ep)}${ref.ep2 && ref.ep2 !== ref.ep ? '-' + pad(ref.ep2) : ''}`;
-        return ref.season != null ? `Stagione ${ref.season} · ${ep}` : ep;
+        const r = ref.ep2 && ref.ep2 !== ref.ep ? '-' + pad(ref.ep2) : '';
+        return (ref.season != null ? 'S' + pad(ref.season) : '') + 'E' + pad(ref.ep) + r;
     }
     if (ref && ref.season != null) return `Stagione ${ref.season}`;
     return `Magnet ${idx + 1}`;
+}
+
+/* ricalcola le etichette (anche quelle vecchie in cache) e usa la stagione del titolo se nel magnet manca */
+function seerRelabel(item, mags) {
+    const s = item && item.meta && item.meta.season;
+    const fb = s && (s.kind === 'season' || s.kind === 'ep') ? s.season : null;
+    return (mags || []).map(m => {
+        if (m.ep == null) return m;
+        const season = m.season != null ? m.season : fb;
+        const r = /(?:Episodio\s+|E)\d+\s*-\s*(\d+)/i.exec(m.label || '');
+        return { ...m, season, label: magnetLabel({ season, ep: m.ep, ep2: r ? +r[1] : null }, 0) };
+    });
 }
 const NON_MOVIE_SERIES_RE = /\b(concerto|concerti|live\s+(?:at|in|from|on|tour|show)|world\s*tour|unplugged|videoclip|videomusic|festival\s*di\s*sanremo|sanremo\s*\d{4}|eurovision|festivalbar|arena\s*di\s*verona|wwe|smackdown|wrestling|aew|nxt|motogp|moto[\s._-]?gp|moto[23]|formula[\s._-]*1|f1[\s._-]*20\d\d|serie\s*a|champions\s*league|europa\s*league|conference\s*league|partita|calcio|mondiali|olimpiadi|superbowl|nba|ufc|mma|pugilato|gran[\s._-]*premio|gp[\s._-]*di|talk[\s._-]*show|reality[\s._-]*show|reality|telegiornale|tg[1-5]|tgcom|striscia\s*la\s*notizia|le\s*iene|masterchef|pechino\s*express|grande\s*fratello|isola\s*dei\s*famosi|amici\s*di\s*maria|uomini\s*e\s*donne|c['’]e\s*posta\s*per\s*te|ballando\s*con\s*le\s*stelle|affari\s*tuoi|reazione\s*a\s*catena|avanti\s*un\s*altro|soliti\s*ignoti|propaganda\s*live|report|presa\s*diretta|presadiretta|dimartedi|di\s*martedi|piazzapulita|quarta\s*repubblica|dritto\s*e\s*rovescio|fuori\s*dal\s*coro|cartabianca|otto\s*e\s*mezzo|domenica\s*in|verissimo|pomeriggio\s*5|la\s*vita\s*in\s*diretta|disco[\s._-]*grafia|discografia|audiobook|audiolibro|audiolibri|greatest\s*hits|the\s*best\s*of|compilation|album\s*\d{4})\b/i;
 const NON_MOVIE_TAGS = /\[\s*(musica|music|concert[oi]|sport|show|programmi|software|giochi|ebook|audio|flac|mp3|edicola|fumetti|giornali|riviste)\s*\]/i;
@@ -2654,12 +2718,14 @@ function parseReleasersDoc(doc) {
         seen.add(name.toLowerCase());
         const a = [...tr.querySelectorAll('a[href]')].find(x => /[?&]u=\d+/.test(x.getAttribute('href')));
         const id = a ? ((a.getAttribute('href').match(/[?&]u=(\d+)/) || [])[1] || null) : null;
+        const pa = [...tr.querySelectorAll('a[href]')].find(x => /\/releaser\/\d+/.test(x.getAttribute('href') || ''));
+        const pid = pa ? ((pa.getAttribute('href').match(/\/releaser\/(\d+)/) || [])[1] || null) : null;
         const img = [...tr.querySelectorAll('img')].find(i => {
             const u = i.getAttribute('data-src') || i.getAttribute('src') || '';
             return /avatar/i.test((i.className || '') + ' ' + u) && !/rank|smil|icon|spacer/i.test(u);
         });
         const s = img && (img.getAttribute('data-src') || img.getAttribute('src'));
-        out.push({ name, id, count, avatar: s && !s.startsWith('data:') ? absUrl(s) : null, tier: relTier(count)[1] });
+        out.push({ name, id, pid, count, avatar: s && !s.startsWith('data:') ? absUrl(s) : null, tier: relTier(count)[1] });
     });
     out.sort((a, b) => b.count - a.count);
     out.forEach((r, i) => { r.rank = i + 1; });
@@ -3106,7 +3172,7 @@ function seerPreferPortrait(item, img) {
 function onImageProblem(img) {
     const item = registry.get(String(img.dataset.seerId));
     if (!item) return;
-    const src = img.getAttribute('src');
+    const src = img.getAttribute('data-full') || img.getAttribute('src');
     if (isProjLike(item) && img.dataset.seerRole !== 'bg' && item.poster === src) {
         const n = item._imgRetry = (item._imgRetry || 0) + 1;
         pjLog(item.id, 'errore caricamento banner, giro', n, src);
@@ -3128,7 +3194,23 @@ function onImageProblem(img) {
     if (item.poster === src) advancePoster(item);
 }
 
+/* MIRSEER-SPEED-PATCH: le chiamate GET a TMDb identiche si fanno una sola volta per sessione e si condividono
+   (ricerca titolo, dettaglio serie): niente piu' N release dello stesso titolo = N volte le stesse richieste. */
+const __jsonMemo = new Map();
 function httpGetJson(url) {
+    if (!/^https:\/\/api\.themoviedb\.org\//.test(url)) return httpGetJsonRaw(url);
+    let p = __jsonMemo.get(url);
+    if (p) return p;
+    p = httpGetJsonRaw(url).then(j => {
+        /* risposte d'errore (rate limit, chiave non valida...) non vanno ricordate */
+        if (j && (j.success === false || (j.status_code && !j.id && !Array.isArray(j.results)))) __jsonMemo.delete(url);
+        return j;
+    }, e => { __jsonMemo.delete(url); throw e; });
+    __jsonMemo.set(url, p);
+    if (__jsonMemo.size > 600) __jsonMemo.delete(__jsonMemo.keys().next().value);
+    return p;
+}
+function httpGetJsonRaw(url) {
     return new Promise((resolve, reject) => {
         if (typeof GM_xmlhttpRequest === 'function') {
             GM_xmlhttpRequest({
@@ -3211,13 +3293,30 @@ const COUNTRY_MAP = [
 ];
 const countryCode = s => { if (!s) return null; const m = COUNTRY_MAP.find(([re]) => re.test(s)); return m ? m[1] : null; };
 
-function pickTmdbResult(results, kind, item) {
-    const wanted = [item.origTitle, item.cleanTitle].filter(Boolean).map(normT);
+/* numero di stagione massimo richiesto dalla release (S02 -> 2, S01-02 -> 2, S02E04 -> 2, COMPLETA -> 1) */
+function tmdbSeasonNeed(item) {
+    const sn = item.meta && item.meta.season;
+    const m = sn && String(sn.short || '').match(/^S(\d+)(?:-(\d+))?/i);
+    if (!m) return 1;
+    return Math.max(parseInt(m[1], 10) || 1, parseInt(m[2], 10) || 1);
+}
+/* una serie che ha meno stagioni di quella richiesta non puo' essere quella giusta */
+async function tmdbSeasonsOk(r, kind, need, apiKey) {
+    if (kind !== 'tv' || need <= 1 || !r || !r.id) return true;
+    try {
+        const d = await httpGetJson(`https://api.themoviedb.org/3/tv/${r.id}?api_key=${encodeURIComponent(apiKey)}&language=it-IT&append_to_response=videos,external_ids&include_video_language=it,en,null`);
+        if (!d || !d.id) return true;
+        return (d.number_of_seasons || 0) >= need;
+    } catch (e) { return true; }
+}
+function pickTmdbCandidates(results, kind, item) {
+    const full = [item.origTitle, item.cleanTitle].filter(Boolean).map(normT).filter(Boolean);
+    const parts = new Set();
+    [item.origTitle, item.cleanTitle].filter(Boolean).forEach(t => verNameVariants(t).forEach(n => { if (!full.includes(n)) parts.add(n); }));
     const y = parseInt(item.fieldYear || item.year, 10) || null;
     const cc = countryCode(item.country);
-    const sn = item.meta && item.meta.season;
-    const firstSeason = !sn || sn.season == null || sn.season <= 1;
-    let best = null, bestScore = 0;
+    const need = tmdbSeasonNeed(item);
+    const scored = [];
 
     for (const r of results.slice(0, 10)) {
         const name = normT(kind === 'tv' ? r.name : r.title);
@@ -3226,41 +3325,78 @@ function pickTmdbResult(results, kind, item) {
         const ry = parseInt(date.slice(0, 4), 10) || null;
         let s = 0;
 
-        if (wanted.includes(name) || wanted.includes(orig)) s += 40;
-        else if (wanted.some(w => w && (name.startsWith(w + ' ') || orig.startsWith(w + ' ')))) s += 8;
+        if (full.includes(name) || full.includes(orig)) s += 40;
+        else if (parts.has(name) || parts.has(orig)) s += 32; /* titolo bilingue: "Mercoledi Wednesday" ~ "Wednesday" */
+        else if (full.some(w => w && (name.startsWith(w + ' ') || orig.startsWith(w + ' ')))) s += 8;
 
         if (y && ry) {
             const d = Math.abs(ry - y);
-            if (d === 0) s += 40;
+            if (kind === 'tv' && need > 1) {
+                /* stagione 2+: la serie e' partita PRIMA dell'anno della release. Un omonimo che esordisce
+                   nello stesso anno (es. un varieta' coreano "Mercoledi" del 2025) NON deve vincere sull'anno */
+                if (ry > y) continue;
+                if (ry < y) s += 20;
+            } else if (d === 0) s += 40;
             else if (d === 1) s += 25;
-            else if (kind === 'movie' || firstSeason) continue;
-        }
+            else continue;
+        } else if (kind === 'tv' && !y && s >= 32) s += 10;
         if (cc && Array.isArray(r.origin_country) && r.origin_country.includes(cc)) s += 15;
         s += Math.min(r.popularity || 0, 50) / 10;
-
-        if (s > bestScore) { bestScore = s; best = r; }
+        scored.push({ r, s });
     }
-    return bestScore >= 40 ? best : null;
+    return scored.filter(x => x.s >= 40).sort((a, b) => b.s - a.s).map(x => x.r);
 }
+const pickTmdbResult = (results, kind, item) => pickTmdbCandidates(results, kind, item)[0] || null;
 
 async function tmdbSearchSmart(item, apiKey, kind) {
     const y = item.fieldYear || item.year || '';
     const queries = [item.origTitle || item.cleanTitle];
     if (item.origTitle && normT(item.origTitle) !== normT(item.cleanTitle)) queries.push(item.cleanTitle);
+    /* titolo bilingue ("Mercoledi Wednesday"): provo anche prima e ultima parola/e, le piu' lunghe prima */
+    {
+        const seen = new Set(queries.map(normT));
+        const extra = [];
+        [item.origTitle, item.cleanTitle].filter(Boolean).forEach(t => {
+            const w = normT(t).split(' ');
+            if (w.length < 2 || w.length > 6) return;
+            for (let k = w.length - 1; k >= 1; k--) {
+                [w.slice(0, k).join(' '), w.slice(w.length - k).join(' ')].forEach(c => {
+                    if (c.length >= 4 && !seen.has(c)) { seen.add(c); extra.push(c); }
+                });
+            }
+        });
+        extra.slice(0, 4).forEach(c => queries.push(c));
+    }
 
+    const need = kind === 'tv' ? tmdbSeasonNeed(item) : 1;
     for (const q of queries) {
-        for (const withYear of (y ? [true, false] : [false])) {
+        /* con anno e senza anno partono insieme; si valutano nello stesso ordine di prima */
+        const reqs = (y ? [true, false] : [false]).map(withYear => {
             let url = `https://api.themoviedb.org/3/search/${kind}?api_key=${encodeURIComponent(apiKey)}&language=it-IT&query=${encodeURIComponent(q)}`;
             if (withYear) url += kind === 'tv' ? `&first_air_date_year=${y}` : `&year=${y}`;
-            const j = await httpGetJson(url);
+            const p = httpGetJson(url);
+            p.catch(() => {});
+            return p;
+        });
+        for (const rq of reqs) {
+            const j = await rq;
             if (!j || !Array.isArray(j.results)) return undefined;
-            const r = pickTmdbResult(j.results, kind, item);
-            if (r) return r;
+            for (const r of pickTmdbCandidates(j.results, kind, item).slice(0, 4)) {
+                if (await tmdbSeasonsOk(r, kind, need, apiKey)) return r;
+            }
         }
     }
     return null;
 }
 
+/* MIRSEER-TMDBGROUP-PATCH: tipo TMDb effettivo. Release in sezioni non mappate ("Stagioni complete", Anime, ...)
+   avevano type = nome del forum e la ricerca TMDb veniva saltata. */
+function tmdbTypeOf(item) {
+    if (item.type === 'Film' || item.type === 'Serie TV') return item.type;
+    if (!verIsVideo(item)) return item.type;
+    const m = item.meta || {};
+    return (m.isTvSeries || m.season || /serie|series|stagion/i.test(item.type || '')) ? 'Serie TV' : 'Film';
+}
 const tmdbPending = new Map();
 function tmdbLookup(item) {
     const k = [item.type, item.extId || '', normT(item.origTitle || item.cleanTitle), item.fieldYear || item.year || '', (item.meta && item.meta.isTvSeries) ? 1 : 0].join('|');
@@ -3276,7 +3412,8 @@ async function tmdbLookupRaw(item) {
     if (!apiKey) return null;
     const ext = item.extId || '';
     const isVideoSection = sectionKindOf(item.type) === 'video';
-    if (item.type !== 'Film' && item.type !== 'Serie TV' && !(ext && isVideoSection)) return null;
+    const iType = tmdbTypeOf(item);
+    if (iType !== 'Film' && iType !== 'Serie TV' && !(ext && isVideoSection)) return null;
 
     if (ext) {
         const idKey = `${CACHE_PREFIX}tmdb_id_${ext.replace(/[^a-z0-9]/gi, '_')}`;
@@ -3286,7 +3423,7 @@ async function tmdbLookupRaw(item) {
             if (/^tt\d+$/.test(ext)) {
                 const j = await httpGetJson(`https://api.themoviedb.org/3/find/${ext}?api_key=${encodeURIComponent(apiKey)}&language=it-IT&external_source=imdb_id`);
                 if (!j || !Array.isArray(j.movie_results) || !Array.isArray(j.tv_results)) return null;
-                const preferTv = item.type === 'Serie TV' || !!(item.meta && item.meta.isTvSeries);
+                const preferTv = iType === 'Serie TV' || !!(item.meta && item.meta.isTvSeries);
                 const tvR = j.tv_results[0], mvR = j.movie_results[0];
                 if (preferTv) { r = tvR || mvR; rk = tvR ? 'tv' : 'movie'; }
                 else { r = mvR || tvR; rk = mvR ? 'movie' : 'tv'; }
@@ -3306,12 +3443,12 @@ async function tmdbLookupRaw(item) {
                 return out;
             }
         } catch (e) { console.warn('TMDB id lookup failed, uso la ricerca per titolo', e); }
-        if (item.type !== 'Film' && item.type !== 'Serie TV') return null;
+        if (iType !== 'Film' && iType !== 'Serie TV') return null;
     }
 
-    const kind = item.type === 'Serie TV' ? 'tv' : 'movie';
+    const kind = iType === 'Serie TV' ? 'tv' : 'movie';
     const yKey = item.fieldYear || item.year || '';
-    const ck = `${CACHE_PREFIX}tmdb_${kind}_${normT(item.origTitle || item.cleanTitle).replace(/ /g, '_')}_${yKey}`;
+    const ck = `${CACHE_PREFIX}tmdb3_${kind}_${normT(item.origTitle || item.cleanTitle).replace(/ /g, '_')}_${yKey}_s${Math.min(tmdbSeasonNeed(item), 2)}`;
     try {
         const c = cacheGet(ck);
         if (c) {
@@ -3426,7 +3563,7 @@ function applyParsed(item, p) {
     item.posterBad = new Set();
     item.backdrop = p.backdrop || null;
     item.synopsis = p.synopsis;
-    item.magnets = (p.magnets || []).slice();
+    item.magnets = seerRelabel(item, p.magnets);
     item.magnet = p.magnet || (item.magnets[0] && item.magnets[0].uri) || null;
     item.thanksUrl = p.thanksUrl || null;
     item.extId = p.extId || null;
@@ -3434,7 +3571,7 @@ function applyParsed(item, p) {
     item.fieldYear = p.fieldYear || null;
     item.genre = p.genre || null;
     item.country = p.country || null;
-    item.tmdbId = p.tmdbId || null;
+    { const _prevTm = item.tmdbId; item.tmdbId = p.tmdbId || null; if (item.tmdbId && item.tmdbId !== _prevTm) seerRegroupSoon(); }
     item.tmdbKind = p.tmdbKind || null;
     item.vote = p.vote || null;
     item.genres = (p.genres || []).slice();
@@ -3585,6 +3722,36 @@ function scrapeProjectBanner(item, el = null) {
     return p;
 }
 
+/* MIRSEER-MAGNETONLY-PATCH: una release e' un thread con un magnet dentro. Thread letti e senza magnet
+   (richieste, discussioni ecc. nel profilo di un releaser o nelle ricerche) vengono nascosti.
+   Esclusi: Progetti e Collezioni. Se il thread e' in una sezione di release ed ha il tasto Grazie, il magnet
+   potrebbe essere nascosto finche' non si ringrazia: in quel caso resta visibile. */
+const seerForeignForum = it => !!(it.forumId || it.forumName)
+    && !(it.forumId && forumToSection.has(String(it.forumId))) && !sectionByName(it.forumName);
+/* MIRSEER-RELEASESIGNAL-PATCH: il magnet puo' essere nascosto finche' non si preme "Grazie": non basta la sua assenza
+   per dire che un thread non e' una release. Si nasconde solo se non c'e' nessun altro segno di release. */
+const SEER_FILE_FMT_RE = /\b(epub|mobi|azw3?|pdf|cbr|cbz|djvu|mp3|flac|m4b|m4a|aac|ogg|wav|iso|exe|dmg|apk)\b/i;
+const seerReleaseSignal = it => VIDEO_EVIDENCE_RE.test(it.rawTitle || '')
+    || SEER_FILE_FMT_RE.test(it.rawTitle || '')
+    || !!it.mediaInfo
+    || (it.sizeBytes || 0) > 0
+    || (!seerForeignForum(it) && !!it.kind && it.kind !== 'text');
+const isNotRelease = it => !!it && !!it.posterTried && !it.unavailable && !isProjLike(it) && !it._fromProject
+    && !(it.magnets && it.magnets.length) && !it.magnet
+    && !seerReleaseSignal(it);
+function seerDropNoRelease(item) {
+    if (!isNotRelease(item) || view.key === 'project') return;
+    const row = document.querySelector(`.seer-row[data-topic-id="${CSS.escape(String(item.id))}"]`);
+    if (!row) return;
+    row.remove();
+    lastDisplayed = lastDisplayed.filter(x => x !== item);
+    const c = $('seer-count');
+    if (c) c.innerText = c.innerText.replace(/^\d+/, n => String(Math.max(0, (+n) - 1)));
+    if (!document.querySelector('#seer-main-list .seer-row')) renderDeck(localFilterValue(), true);
+    if (view.key === 'releaser') { clearTimeout(seerDropT); seerDropT = setTimeout(() => { try { renderRelPanel(); } catch (e) {} }, 300); }
+}
+let seerDropT = 0;
+
 function scrapeTopicData(item, el = null, low = false) {
     if (item.posterTried) return Promise.resolve(snapshot(item));
     if (isProjLike(item)) return scrapeProjectBanner(item, el);
@@ -3592,6 +3759,7 @@ function scrapeTopicData(item, el = null, low = false) {
     const cached = readCache(item.id, item);
     if (cached) {
         applyParsed(item, cached);
+        seerDropNoRelease(item);
         if (!el) warmImage(item.poster);
         upgradeTmdbTitle(item, cached);
         return Promise.resolve(cached);
@@ -3676,6 +3844,7 @@ function scrapeTopicData(item, el = null, low = false) {
             };
 
             applyParsed(item, result);
+            seerDropNoRelease(item);
             if (!el) warmImage(item.poster);
             if (!tmdbFailed) saveCache(item);
             return result;
@@ -3765,7 +3934,7 @@ function tvEpsOfMagnet(m) {
     const out = [];
     if (!m || m.ep == null) return out;
     let b = m.ep;
-    const r = /Episodio\s+\d+\s*-\s*(\d+)/i.exec(m.label || '');
+    const r = /E(?:pisodio)?\s*\d+\s*-\s*(\d+)/i.exec(m.label || '');
     if (r && +r[1] > b && +r[1] - b < 300) b = +r[1];
     for (let e = m.ep; e <= b; e++) out.push([m.season != null ? m.season : null, e]);
     return out;
@@ -4276,6 +4445,7 @@ function setModalImage(item, modalWindow, modalLeft) {
             modalWindow.classList.remove('is-landscape');
         }
     };
+    try { modalLeft.style.setProperty('--seer-art', 'url("' + String(item.poster).replace(/["\\\r\n]/g, '') + '")'); } catch (e) {}
     img.src = item.poster;
     modalLeft.appendChild(img);
 }
@@ -4285,6 +4455,7 @@ const kindIcon = item => { const k = effKind(item); return k === 'text' ? '📝'
 function paintModalArt(item) {
     const modalWindow = $('seer-modal-overlay').querySelector('.seer-detail-window');
     const modalLeft = $('seer-modal-left-art');
+    modalLeft.style.removeProperty('--seer-art');
     if (item.poster) setModalImage(item, modalWindow, modalLeft);
     else {
         modalWindow.classList.remove('is-landscape');
@@ -4360,21 +4531,127 @@ const verClean = it => {
     }
     return v || it.cleanTitle;
 };
+// Toglie il marcatore di capitolo finale ("Parte 2", "Parte due", "Part II"...) dai film:
+// il capitolo e' gia' distinto dall'anno, mentre il marcatore spezzava il gruppo
+// ("Dune", "Dune Parte 1", "Dune - Parte due", "Dune Parte 2" = 4 gruppi invece di 2).
+const VER_PART_RE = /\s+(?:parte|part|capitolo|chapter)\s+(?:\d{1,2}|uno|due|tre|quattro|cinque|i{1,3}|iv|v)$/;
+const verStripPart = (t, it) => (it.meta && it.meta.season) ? t : (t.replace(VER_PART_RE, '') || t);
 const verTitleKey = it => {
     if (!verIsVideo(it)) return 'id:' + it.id;
-    const t = normT(verClean(it));
+    const t = verStripPart(normT(verClean(it)), it);
     if (!t) return 'id:' + it.id;
     return t + '|' + (it.meta && it.meta.season ? '' : (it.fieldYear || it.year || '')) + '|' + verSeason(it) + '|' + verType(it);
 };
-const verTmdbKey = it => (it.tmdbId && verIsVideo(it))
-    ? 'tmdb:' + (it.tmdbKind || '') + ':' + it.tmdbId + '|' + verSeason(it) + '|' + verType(it) : null;
-
+/* MIRSEER-TMDBGROUP-PATCH: raggruppamento versioni basato sull'ID TMDb.
+   Chiave = tmdb:<kind>:<id>|<stagione>|<tipo>. Release senza ID: si agganciano a un ID TMDb tramite i nomi
+   noti della stessa serie/film (titolo TMDb, titolo originale, titolo pulito e loro parti), altrimenti
+   restano raggruppate per titolo normalizzato. */
+const verTmdbBase = it => (it.tmdbId && verIsVideo(it)) ? 'tmdb:' + (it.tmdbKind || '') + ':' + it.tmdbId : null;
+const verTail = it => '|' + verSeason(it) + '|' + verType(it);
+/* MIRSEER-TMDBGROUP-PATCH v2: nomi SOLO esatti (niente sotto-frasi) + anno obbligatorio per i film.
+   Prima "Il corvo 2 - La città degli angeli" produceva la sotto-frase "il corvo" e si agganciava all'ID TMDb
+   de "Il corvo" (1994): tutti i sequel finivano nello stesso gruppo. Ora un nome vale solo se coincide per intero
+   (o coincide per intero una delle parti separate da " - ", " / ", " aka ") E l'anno e' compatibile (±1). */
+function verNameVariants(title) {
+    const t = normT(title);
+    if (!t) return [];
+    const out = new Set([t]);
+    String(title || '').split(/\s+[-\u2013\u2014:]\s+|\s+\/\s+|\s+aka\s+/i).forEach(p => {
+        const n = normT(p);
+        if (n && n.length >= 2) out.add(n);
+    });
+    return [...out];
+}
+function verNamesOf(it) {
+    const base = [verClean(it), it.cleanTitle, it.origTitle, it.tmdbTitle].filter(Boolean);
+    const out = new Set();
+    base.forEach(b => verNameVariants(verStripPart(normT(b), it) || b).forEach(n => out.add(n)));
+    return [...out];
+}
+/* anno usato per distinguere i film (le serie sono distinte dalla stagione) */
+const verYearOf = it => (it.meta && it.meta.season) ? '' : String(parseInt(it.fieldYear || it.year, 10) || '');
+/* anni candidati: esatto, poi ±1 (l'anno del forum puo' differire da quello TMDb di uno) */
+const verYearCands = y => {
+    if (!y) return [''];
+    const n = parseInt(y, 10);
+    return [String(n), String(n - 1), String(n + 1)];
+};
+let seerLastSig = '';
 function versionKeyMap(items) {
-    const alias = new Map();
-    items.forEach(it => { const k = verTmdbKey(it); if (k) alias.set(verTitleKey(it), k); });
     const m = new Map();
-    items.forEach(it => m.set(it, verTmdbKey(it) || alias.get(verTitleKey(it)) || verTitleKey(it)));
+    /* 1) release con ID TMDb: chiave diretta. Indice nome|coda|anno -> base tmdb (null se ambiguo) */
+    const nameIdx = new Map();
+    const addIdx = (k, b) => {
+        if (!nameIdx.has(k)) nameIdx.set(k, b);
+        else if (nameIdx.get(k) !== b) nameIdx.set(k, null);
+    };
+    items.forEach(it => {
+        const b = verTmdbBase(it);
+        if (!b) return;
+        const tail = verTail(it);
+        m.set(it, b + tail);
+        const y = verYearOf(it);
+        verNamesOf(it).forEach(n => addIdx(n + tail + '|' + y, b));
+    });
+    /* 2) release senza ID: aggancio SOLO per nome intero + anno compatibile; se piu' ID combaciano resta non agganciata */
+    items.forEach(it => {
+        if (m.has(it)) return;
+        if (!verIsVideo(it)) { m.set(it, verTitleKey(it)); return; }
+        const tail = verTail(it);
+        const ys = verYearCands(verYearOf(it));
+        let hit = null;
+        const names = verNamesOf(it);
+        /* prima il titolo pulito intero, poi gli altri nomi */
+        const own = verStripPart(normT(verClean(it)), it);
+        const ordered = own ? [own, ...names.filter(n => n !== own)] : names;
+        outer:
+        for (const n of ordered) {
+            for (const y of ys) {
+                const b = nameIdx.get(n + tail + '|' + y);
+                if (b) { hit = b; break outer; }
+                if (b === null) break; /* ambiguo con questo anno: non indovino */
+            }
+        }
+        m.set(it, hit ? hit + tail : verTitleKey(it));
+    });
+    /* 3) release rimaste senza ID: stesso titolo normalizzato (con anno) di un gruppo gia' formato */
+    const byTitle = new Map();
+    items.forEach(it => { if (verTmdbBase(it)) byTitle.set(verTitleKey(it), m.get(it)); });
+    items.forEach(it => {
+        if (verTmdbBase(it)) return;
+        if (m.get(it) && String(m.get(it)).startsWith('tmdb:')) return;
+        const t = byTitle.get(verTitleKey(it));
+        if (t) m.set(it, t);
+    });
     return m;
+}
+/* quando arrivano nuovi ID TMDb ricalcola i gruppi della lista (solo se il raggruppamento cambia davvero) */
+/* risolve in background gli ID TMDb delle release video della lista che non li hanno ancora (ricerca/sezioni):
+   senza questo il raggruppamento dipende da quali card sono state scansionate prima del disegno della lista */
+const seerWarmedIds = new Set();
+function seerWarmIds(pool) {
+    try {
+        if (!getTmdbKey() || !search.active) return;
+        const todo = pool.filter(it => !it.tmdbId && !it.posterTried && !seerWarmedIds.has(String(it.id)) && verIsVideo(it) && !isProjLike(it)).slice(0, 12);
+        todo.forEach((it, i) => {
+            seerWarmedIds.add(String(it.id));
+            setTimeout(() => { scrapeTopicData(it, null, true).catch(() => {}); }, 60 * i);
+        });
+    } catch (e) { /* ignore */ }
+}
+let seerRegroupT = 0;
+function seerRegroupSoon() {
+    clearTimeout(seerRegroupT);
+    seerRegroupT = setTimeout(() => {
+        try {
+            const app = $('mirseer-app');
+            if (!app || app.style.display !== 'block') return;
+            if (view.key === 'account' || view.key === 'project' || view.key === 'favs' || view.key === 'releaser') return;
+            const before = seerLastSig;
+            getVisibleItems();
+            if (seerLastSig !== before) renderDeck(localFilterValue(), true);
+        } catch (e) { console.warn('regroup', e); }
+    }, 1200);
 }
 
 const SRC_RANK = { 'Remux': 50, 'UHD BluRay': 45, 'BluRay': 40, 'WEB-DL': 30, 'HDTV': 20, 'DVDRip': 10, 'Rip': 0 };
@@ -4407,6 +4684,13 @@ function versionLabels(list) {
         const codec = m.isAv1 ? 'AV1' : m.isH265 ? 'HEVC' : m.isH264 ? 'AVC' : '';
         return l + ' · ' + [codec, list[i].author].filter(Boolean).join(' ');
     });
+}
+
+async function seerDiscoverFor(item, token) {
+    try { await cmpDiscoverVersions(item); } catch (e) { return; }
+    if (token !== modalToken || currentModalItem !== item) return;
+    const all = versionsFor(item);
+    if (all.length > modalVersions.length) { modalVersions = all; try { paintVersions(item); } catch (e) { } }
 }
 
 function paintVersions(item) {
@@ -4529,6 +4813,22 @@ function openMagnet(uri) {
 const PLAY_INIT_TIMEOUT_MS = 8000;   /* il player deve segnalare "inited" entro 8s */
 const PLAY_STALL_TIMEOUT_MS = 15000; /* buffering continuo oltre 15s = stallo */
 const VLC_PREF_KEY = 'vlcStreamBase'; /* base URL di TorrServer, es. http://127.0.0.1:8090 */
+/* MIRSEER-TSAUTH-PATCH: credenziali TorrServer (HTTP Basic). Senza, le chiamate GM_xmlhttpRequest
+   non sono autenticate e TorrServer risponde 401 finche' non fai login nella UI del browser. */
+const tsUser = () => String(getPref('tsUser', '') || '');
+const tsPass = () => String(getPref('tsPass', '') || '');
+function tsHeaders(extra) {
+    const h = Object.assign({}, extra || {});
+    const u = tsUser(), p = tsPass();
+    if (u) h['Authorization'] = 'Basic ' + btoa(unescape(encodeURIComponent(u + ':' + p)));
+    return h;
+}
+/* VLC non puo' mandare header custom: le credenziali vanno incorporate nell'URL (http://user:pass@host). */
+function tsAuthUrl(url) {
+    const u = tsUser();
+    if (!u || !/^https?:\/\//i.test(url) || /^https?:\/\/[^\/]*@/i.test(url)) return url;
+    return url.replace(/^(https?:\/\/)/i, '$1' + encodeURIComponent(u) + ':' + encodeURIComponent(tsPass()) + '@');
+}
 
 /* Motivi per cui un rilascio NON e' riproducibile in un <video> del browser. */
 function browserIncompatReasons(item, uri) {
@@ -4541,6 +4841,8 @@ function browserIncompatReasons(item, uri) {
     if (m.is10bit || /\b(10[\s._-]?bit|hi10p?|main[\s._-]?10)\b/i.test(pool)) out.push('10-bit');
     if (m.isHDR || m.isDV || /\b(hdr10\+?|hdr|dolby[\s._-]*vision)\b/i.test(pool)) out.push('HDR/Dolby Vision');
     if (m.isAv1 || /\bav1\b/i.test(pool)) out.push('AV1');
+    /* MIRSEER-NOAUDIO: i browser non decodificano AC3/E-AC3: il video parte ma senza audio */
+    if (/^(E-AC3|AC3)$/i.test(m.audioCodec || '') || /\b(?:e-?ac-?3|ac-?3|ddp\d?|dd\+|dd[25]\.[01]|dolby[\s._-]*digital)(?![a-z])/i.test(pool)) out.push('audio AC3/E-AC3 (senza audio nel browser)');
     if (/\bremux\b/i.test(pool)) out.push('Remux (bitrate troppo alto)');
     if (/\b(dts(?:[\s._-]?hd)?(?:[\s._-]?ma)?|true[\s._-]?hd|atmos)\b/i.test(pool) ||
         /^(DTS|TrueHD|Atmos)/i.test(m.audioCodec || '')) out.push('audio DTS/TrueHD/Atmos');
@@ -4558,54 +4860,228 @@ function vlcSafeName(item, uri) {
 function vlcStreamUrl(uri, name, index) {
     const base = String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
     if (!/^https?:\/\//i.test(base)) return '';
-    return base + '/stream/' + encodeURIComponent(name) + '?link=' + encodeURIComponent(uri) + '&index=' + (index || 1) + '&play';
+    return tsAuthUrl(base + '/stream/' + encodeURIComponent(name) + '?link=' + encodeURIComponent(uri) + '&index=' + (index || 1) + '&play');
 }
 /* MIRSEER-PREADD: aggiunge il torrent a TorrServer prima di aprire VLC */
 let seerVlcBusy = false;
+let seerTsLastStatus = 0;
 function seerPreAddTorrent(base, uri, name) {
+    seerTsLastStatus = 0;
     return new Promise(resolve => {
         if (typeof GM_xmlhttpRequest !== 'function') return resolve(false);
         GM_xmlhttpRequest({
             method: 'POST', url: base + '/torrents', timeout: 120000,
-            headers: { 'Content-Type': 'application/json' },
+            headers: tsHeaders({ 'Content-Type': 'application/json' }),
             data: JSON.stringify({ action: 'add', link: uri, title: name, poster: '', save_to_db: false }),
-            onload: r => resolve(r.status >= 200 && r.status < 300),
+            onload: r => { seerTsLastStatus = r.status; resolve(r.status >= 200 && r.status < 300); },
             onerror: () => resolve(false),
             ontimeout: () => resolve(false)
         });
     });
 }
+/* MIRSEER-STREAM-PATCH: flusso VLC piu' robusto + diagnostica leggibile.
+   Cosa cambia rispetto a prima:
+   - aspetta davvero i metadati del torrent (prima VLC partiva subito e andava in timeout)
+   - sceglie il file video giusto (il piu' grande) invece di "index=1", che puo' essere un .nfo/.srt/sample
+   - mette il nome reale del file (con estensione) nell'URL, cosi' VLC riconosce il contenitore
+   - se l'attesa e' lunga chiede un tap "Apri in VLC" (il browser blocca i lanci senza gesto recente)
+   - dopo ogni lancio compare "Diagnostica": un report leggibile e copiabile (l'errore di VLC su telefono e' tagliato) */
+const seerBaseUrl = () => String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
+let seerLastStream = null;
+
+function seerTsReq(base, body, timeout) {
+    return new Promise(resolve => {
+        if (typeof GM_xmlhttpRequest !== 'function') return resolve({ ok: false, status: 0, json: null, err: 'GM_xmlhttpRequest non disponibile' });
+        GM_xmlhttpRequest({
+            method: 'POST', url: base + '/torrents', timeout: timeout || 30000,
+            headers: tsHeaders({ 'Content-Type': 'application/json' }),
+            data: JSON.stringify(body),
+            onload: r => {
+                let j = null;
+                try { j = JSON.parse(r.responseText); } catch (e) {}
+                resolve({ ok: r.status >= 200 && r.status < 300, status: r.status, json: j });
+            },
+            onerror: () => resolve({ ok: false, status: 0, json: null, err: 'server irraggiungibile' }),
+            ontimeout: () => resolve({ ok: false, status: 0, json: null, err: 'timeout' })
+        });
+    });
+}
+
+function seerHttp(url, opt) {
+    const t0 = Date.now();
+    return new Promise(resolve => {
+        if (typeof GM_xmlhttpRequest !== 'function') return resolve({ status: 0, err: 'GM_xmlhttpRequest non disponibile', ms: 0 });
+        GM_xmlhttpRequest({
+            method: 'GET', url, timeout: opt.timeout || 20000, responseType: opt.binary ? 'arraybuffer' : 'text',
+            headers: tsHeaders(opt.headers || {}),
+            onload: r => resolve({ status: r.status, headers: String(r.responseHeaders || ''), body: r.response, text: r.responseText, ms: Date.now() - t0 }),
+            onerror: () => resolve({ status: 0, err: 'connessione rifiutata o server irraggiungibile', ms: Date.now() - t0 }),
+            ontimeout: () => resolve({ status: 0, err: 'timeout dopo ' + Math.round((opt.timeout || 20000) / 1000) + 's', ms: Date.now() - t0, timeout: true })
+        });
+    });
+}
+const seerHdr = (h, k) => { const m = String(h || '').match(new RegExp('^' + k + ':\\s*(.*)$', 'im')); return m ? m[1].trim() : ''; };
+
+/* aggiunge il torrent e aspetta l'elenco dei file (metadati dai peer) */
+async function seerPrepareStream(base, uri, name, onProgress) {
+    const out = { ok: false, status: 0, hash: '', files: [], err: '', info: null };
+    const r = await seerTsReq(base, { action: 'add', link: uri, title: name, poster: '', save_to_db: false }, 120000);
+    seerTsLastStatus = r.status;
+    out.status = r.status;
+    if (!r.ok) { out.err = r.err || ('HTTP ' + r.status); return out; }
+    let t = r.json || {};
+    out.hash = t.hash || '';
+    for (let i = 0; i < 40 && !(t.file_stats && t.file_stats.length) && out.hash; i++) {
+        if (onProgress) onProgress(i);
+        await sleep(1500);
+        const g = await seerTsReq(base, { action: 'get', hash: out.hash }, 15000);
+        if (g.ok && g.json) t = g.json;
+    }
+    out.info = t;
+    out.files = (t.file_stats || []).map(f => ({ index: f.id, path: String(f.path || ''), size: Number(f.length) || 0 }));
+    out.ok = true;
+    return out;
+}
+const seerBaseName = p => { const a = String(p || '').split('/').filter(Boolean); return a[a.length - 1] || ''; };
+function seerPickFile(files, wantIdx) {
+    if (!files || !files.length) return null;
+    if (wantIdx) { const f = files.find(x => x.index === wantIdx); if (f) return f; }
+    const vids = files.filter(f => FP_VIDEO_RE.test(f.path));
+    const pool = vids.length ? vids : files;
+    const real = pool.filter(f => !(/\bsample\b/i.test(f.path) && f.size < 100 * 1024 * 1024));
+    return (real.length ? real : pool).slice().sort((a, b) => b.size - a.size)[0];
+}
+function seerStreamUrl(base, link, fname, idx, withAuth) {
+    const u = base + '/stream/' + encodeURIComponent(fname || 'video') + '?link=' + encodeURIComponent(link) + '&index=' + (idx || 1) + '&play';
+    return withAuth === false ? u : tsAuthUrl(u);
+}
+async function seerProbeUrlAuth(base, link, fname, idx) {
+    const u = seerStreamUrl(base, link, fname, idx, false);
+    const st = await new Promise(res => GM_xmlhttpRequest({
+        method: 'GET', url: u, anonymous: true, timeout: 20000,
+        headers: { Range: 'bytes=0-0' },
+        onload: x => res(x.status), onerror: () => res(0), ontimeout: () => res(0)
+    }));
+    return st === 401 || st === 403;   // solo se il server lo richiede davvero
+}
+function seerSniff(buf) {
+    const b = new Uint8Array(buf || new ArrayBuffer(0));
+    if (!b.length) return { kind: 'empty', label: 'nessun dato' };
+    if (b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3) return { kind: 'video', label: 'Matroska/WebM (MKV)' };
+    if (b.length > 8 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return { kind: 'video', label: 'MP4/MOV' };
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return { kind: 'video', label: 'AVI (RIFF)' };
+    if (b[0] === 0x47 && b.length > 188 && b[188] === 0x47) return { kind: 'video', label: 'MPEG-TS' };
+    if (b[0] === 0x00 && b[1] === 0x00 && b[2] === 0x01 && (b[3] === 0xBA || b[3] === 0xB3)) return { kind: 'video', label: 'MPEG-PS' };
+    let bad = 0;
+    const n = Math.min(b.length, 300);
+    for (let i = 0; i < n; i++) { const c = b[i]; if (c < 9 || (c > 13 && c < 32) || c === 127) bad++; }
+    if (bad / n < 0.02) return { kind: 'text', label: 'testo (HTML/JSON/errore)' };
+    return { kind: 'unknown', label: 'formato non riconosciuto' };
+}
+
+/* ---- piccoli elementi UI (stato, richiesta tap, chip diagnostica) ---- */
+function seerBusyChip(text) {
+    let el = document.getElementById('seer-vlcbusy');
+    if (!el) { el = document.createElement('div'); el.id = 'seer-vlcbusy'; document.body.appendChild(el); }
+    el.textContent = text;
+    return { set: t => { el.textContent = t; }, close: () => { if (el.parentNode) el.remove(); } };
+}
+function seerAskLaunch(title) {
+    return new Promise(resolve => {
+        const ov = document.createElement('div');
+        ov.id = 'seer-launch';
+        ov.innerHTML = '<div class="sl-box"><div class="sl-ico">✅</div><div class="sl-t">Torrent pronto</div><div class="sl-s">' + esc(title) +
+            '</div><button type="button" class="sl-go">▶ Apri in VLC</button><button type="button" class="sl-no">Annulla</button></div>';
+        const done = v => { ov.remove(); resolve(v); };
+        ov.querySelector('.sl-go').onclick = () => done(true);
+        ov.querySelector('.sl-no').onclick = () => done(false);
+        ov.addEventListener('click', e => { if (e.target === ov) done(false); });
+        document.body.appendChild(ov);
+    });
+}
+function seerShowDiagChip() {
+    const old = document.getElementById('seer-diagchip');
+    if (old) old.remove();
+    const el = document.createElement('button');
+    el.id = 'seer-diagchip';
+    el.type = 'button';
+    el.textContent = '🔬 VLC dà errore? Diagnostica';
+    el.onclick = () => { el.remove(); seerOpenDiag(); };
+    document.body.appendChild(el);
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 60000);
+}
+function seerDownloadM3u(text, name) {
+    const blobUrl = URL.createObjectURL(new Blob([text], { type: 'audio/x-mpegurl' }));
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = name + '.m3u';
+    a.dataset.seerTracked = '1';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+}
+
 async function triggerVlcHandoff(uri, item, forceM3u, opts) {
     if (!uri || !/^magnet:/i.test(String(uri)) || seerVlcBusy) return;
     seerVlcBusy = true;
+    const t0 = Date.now();
+    let busy = null;
     try {
-        const idx = (opts && opts.index) || 1;
         const wantPl = !!(opts && opts.playlist && opts.playlist.length);
-        const useScheme = !forceM3u && !wantPl && getPref('vlcMode', 'scheme') !== 'm3u';
-        const name = (opts && opts.fileName)
+        const useScheme = !forceM3u && !wantPl && (IS_COARSE ? 'm3u' : getPref('vlcMode', 'scheme')) !== 'm3u';
+        const title = (opts && opts.fileName)
             ? (String(opts.fileName).replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || vlcSafeName(item, uri))
             : vlcSafeName(item, uri);
-        let url = vlcStreamUrl(uri, name, idx);
-        if (!url) {
+        let base = seerBaseUrl();
+        if (!/^https?:\/\//i.test(base)) {
             const ans = window.prompt(
                 'VLC non riproduce i magnet direttamente: serve un server di streaming (es. TorrServer).\n\n' +
                 'Inserisci l\'indirizzo di TorrServer (verra\' salvato):',
                 'http://127.0.0.1:8090');
-            if (ans && /^https?:\/\//i.test(ans.trim())) {
-                setPref(VLC_PREF_KEY, ans.trim());
-                url = vlcStreamUrl(uri, name, idx);
-            }
+            if (ans && /^https?:\/\//i.test(ans.trim())) { setPref(VLC_PREF_KEY, ans.trim()); base = seerBaseUrl(); }
         }
-        let added = false;
-        if (url) {
-            const base = String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
-            toast('⏳ Preparo il torrent sul server…', '', 6000);
-            const pre = seerPreAddTorrent(base, uri, name);
-            added = useScheme
-                ? await Promise.race([pre, sleep(3000).then(() => false)])
-                : await pre;
+        if (!/^https?:\/\//i.test(base)) {
+            seerDownloadM3u('#EXTM3U\r\n#EXTINF:-1,' + title.replace(/,/g, ' ') + '\r\n' + uri + '\r\n', title);
+            if (item) { markSeen(item, true); trackDl(item, [uri], 'vlc'); }
+            toast('⚠ Playlist con magnet: richiede un server di streaming per VLC', '', 4200);
+            return;
         }
-        if (url && useScheme) {
+
+        busy = seerBusyChip('⏳ Preparo il torrent sul server…');
+        const prep = await seerPrepareStream(base, uri, title, i => { if (i >= 2) busy.set('⏳ Attendo i metadati dai peer… ' + Math.round(i * 1.5) + 's'); });
+        busy.close(); busy = null;
+        seerLastStream = { base, uri, item, opts, title, prep, link: uri, wantPl, idx: 1, fname: title, t: Date.now() };
+
+        if (!prep.ok && (prep.status === 401 || prep.status === 403)) {
+            toast('🔐 TorrServer chiede il login: inserisci utente e password in Impostazioni › TorrServer, poi riprova', '', 7000);
+            seerShowDiagChip();
+            return;
+        }
+        if (!prep.ok && prep.status === 0) {
+            toast('⚠ TorrServer non raggiungibile da questo dispositivo (' + (prep.err || 'errore di rete') + ')', '', 7000);
+            seerShowDiagChip();
+            return;
+        }
+
+        const chosen = seerPickFile(prep.files, opts && opts.index);
+        const idx = chosen ? chosen.index : ((opts && opts.index) || 1);
+        const fname = chosen ? (seerBaseName(chosen.path) || title) : title;
+        const nameFor = f => { const m = prep.files.find(x => x.index === f.index); return (m && seerBaseName(m.path)) || f.name || 'video'; };
+        const needAuth = !!tsUser() && await seerProbeUrlAuth(base, uri, fname, idx);
+        const shortExt = (String(fname).match(/\.[a-z0-9]{2,4}$/i) || ['.mkv'])[0]; /* MIRSEER-SHORTURL */
+        const url = seerStreamUrl(base, prep.hash || uri, 'video' + shortExt, idx, needAuth);
+        try { copyToClipboard(url); } catch (e) {} /* MIRSEER-CLIP-PATCH */
+        Object.assign(seerLastStream, { chosen, idx, fname });
+
+        /* l'attesa ha consumato il gesto dell'utente: il browser bloccherebbe il lancio automatico -> serve un tap */
+        if (Date.now() - t0 > 3500) {
+            const go = await seerAskLaunch(title);
+            if (!go) return;
+        }
+
+        if (useScheme) {
             const tpl = String(getPref('vlcSchemeTpl', 'vlc://{url}') || 'vlc://{url}');
             const link = tpl.replace(/\{urlenc\}/g, () => encodeURIComponent(url)).replace(/\{url\}/g, () => url);
             const a = document.createElement('a');
@@ -4615,31 +5091,148 @@ async function triggerVlcHandoff(uri, item, forceM3u, opts) {
             document.body.appendChild(a);
             a.click();
             a.remove();
-            if (item) { markSeen(item, true); trackDl(item, [uri], 'vlc'); }
-            toast('▶ Apro VLC… (se non parte controlla il gestore vlc://)', 'ok', 4500);
-            return;
+            toast('📋 Link copiato! Se VLC non parte: Apri flusso di rete › Incolla', 'ok', 4500);
+        } else {
+            const m3u = wantPl
+                ? '#EXTM3U\r\n' + opts.playlist.map(f => '#EXTINF:-1,' + String(f.name).replace(/,/g, ' ') + '\r\n' + seerStreamUrl(base, prep.hash || uri, 'video' + ((nameFor(f).match(/\.[a-z0-9]{2,4}$/i) || ['.mkv'])[0]), f.index, needAuth)).join('\r\n') + '\r\n'
+                : '#EXTM3U\r\n#EXTINF:-1,' + title.replace(/,/g, ' ') + '\r\n' + url + '\r\n';
+            seerDownloadM3u(m3u, title);
+            toast('📋 Link copiato! In VLC: Apri flusso di rete › Incolla. (oppure apri la playlist)' + (tsUser() ? ' · login incluso nel link' : ''), 'ok', 4200);
         }
-        const entry = url || uri; /* senza server: playlist col magnet (funziona solo con plugin torrent) */
-        const m3u = (wantPl && url)
-            ? '#EXTM3U\r\n' + opts.playlist.map(f => '#EXTINF:-1,' + String(f.name).replace(/,/g, ' ') + '\r\n' + vlcStreamUrl(uri, f.name, f.index)).join('\r\n') + '\r\n'
-            : '#EXTM3U\r\n#EXTINF:-1,' + name.replace(/,/g, ' ') + '\r\n' + entry + '\r\n';
-        const blobUrl = URL.createObjectURL(new Blob([m3u], { type: 'audio/x-mpegurl' }));
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = name + '.m3u';
-        a.dataset.seerTracked = '1';
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
         if (item) { markSeen(item, true); trackDl(item, [uri], 'vlc'); }
-        if (!url) toast('⚠ Playlist con magnet: richiede un server di streaming per VLC', '', 4200);
-        else if (added) toast('▶ Torrent pronto: apri la playlist con VLC', 'ok', 4200);
-        else toast('⚠ Playlist scaricata, ma il server non ha confermato il torrent: VLC potrebbe metterci un po\'', '', 5200);
+        seerShowDiagChip();
     } finally {
+        if (busy) busy.close();
         seerVlcBusy = false;
     }
+}
+
+/* ---- diagnostica: spiega in chiaro perche' VLC puo' dare errore ---- */
+async function seerDiagnose(add) {
+    const S = seerLastStream;
+    if (!S) { add('ℹ️ Nessuno stream da analizzare: premi prima ▶ Play su un titolo.'); return; }
+    const problems = [];
+    const bad = m => { problems.push(m); add('❌ ' + m); };
+    add('Titolo: ' + S.title);
+    add('Server: ' + S.base);
+    let host = '';
+    try { host = new URL(S.base).hostname; } catch (e) {}
+    if (/^(localhost|127\.|0\.0\.0\.0|\[?::1)/i.test(host)) bad('L\'indirizzo del server è "' + host + '": sul telefono indica il telefono stesso, non il PC/server. Usa l\'IP di rete (es. http://192.168.1.20:8090) in Impostazioni › TorrServer.');
+    else add('✅ Indirizzo server: ' + host);
+    if (tsUser()) add('ℹ️ Login attivo: VLC riceve utente:password dentro l\'URL. Alcune versioni di VLC mobile lo ignorano (errore 401).');
+
+    const echo = await seerHttp(S.base + '/echo', { timeout: 8000 });
+    if (echo.status === 200) add('✅ TorrServer raggiungibile' + (echo.text ? ' (versione ' + String(echo.text).trim().slice(0, 40) + ')' : '') + ' in ' + echo.ms + ' ms');
+    else if (echo.status === 401 || echo.status === 403) { bad('TorrServer chiede il login (HTTP ' + echo.status + '): inserisci utente e password in Impostazioni › TorrServer.'); }
+    else if (echo.status === 0) { bad('TorrServer non raggiungibile: ' + echo.err + '. Telefono e server devono stare sulla stessa rete e la porta deve essere aperta.'); }
+    else add('⚠️ /echo ha risposto HTTP ' + echo.status);
+    if (echo.status === 0 || echo.status === 401 || echo.status === 403) { add(''); add('👉 Causa probabile: ' + problems[problems.length - 1]); return; }
+
+    /* stato torrent + file */
+    let info = S.prep && S.prep.info, files = (S.prep && S.prep.files) || [];
+    if (S.prep && S.prep.hash) {
+        const g = await seerTsReq(S.base, { action: 'get', hash: S.prep.hash }, 15000);
+        if (g.ok && g.json) {
+            info = g.json;
+            if (g.json.file_stats && g.json.file_stats.length) files = g.json.file_stats.map(f => ({ index: f.id, path: String(f.path || ''), size: Number(f.length) || 0 }));
+        }
+    }
+    if (info) {
+        const bits = [];
+        if (info.active_peers != null) bits.push('peer attivi ' + info.active_peers + (info.total_peers != null ? '/' + info.total_peers : ''));
+        if (info.connected_seeders != null) bits.push('seed ' + info.connected_seeders);
+        if (info.download_speed != null) bits.push('velocità ' + fpSize(Math.round(info.download_speed)) + '/s');
+        if (bits.length) add('ℹ️ Torrent: ' + bits.join(' · '));
+        if (info.active_peers === 0 && !files.length) bad('Nessun peer collegato e nessun metadato: il torrent non parte (poco seminato).');
+    }
+    const vids = files.filter(f => FP_VIDEO_RE.test(f.path));
+    if (!files.length) bad('TorrServer non ha ancora l\'elenco dei file (metadati mancanti): VLC non può avviare nulla. Riprova tra poco o scegli un torrent con più seed.');
+    else {
+        add('✅ File nel torrent: ' + files.length + ' · video: ' + vids.length);
+        if (!vids.length) bad('Nel torrent non c\'è nessun file video riconosciuto (' + files.slice(0, 3).map(f => seerBaseName(f.path)).join(', ') + '…).');
+    }
+    const chosen = seerPickFile(files, S.opts && S.opts.index) || S.chosen;
+    const idx = chosen ? chosen.index : S.idx;
+    const fname = chosen ? (seerBaseName(chosen.path) || S.fname) : S.fname;
+    if (chosen) {
+        add('🎞 File scelto: #' + idx + ' ' + fname + ' (' + fpSize(chosen.size) + ')');
+        if (!FP_VIDEO_RE.test(chosen.path)) bad('Il file scelto (#' + idx + ') non è un video: VLC non può riprodurlo.');
+        if (vids.length > 1 && !S.wantPl && !(S.opts && S.opts.index)) add('ℹ️ Il torrent ha ' + vids.length + ' video: apro il più grande. Per scegliere un episodio usa l\'elenco file.');
+    }
+
+    /* test reale del flusso (primi 4 KB) */
+    const plainExt = (String(fname).match(/\.[a-z0-9]{2,4}$/i) || ['.mkv'])[0];
+    const plain = seerStreamUrl(S.base, (S.prep && S.prep.hash) || S.link || S.uri, 'video' + plainExt, idx, false);
+    add('⏳ Test del flusso (fino a 45 s)…');
+    const r = await seerHttp(plain, { binary: true, timeout: 45000, headers: { Range: 'bytes=0-4095' } });
+    if (r.status === 0) {
+        if (r.timeout) bad('Il server non ha fornito dati entro 45 s: torrent lento o senza peer. VLC si arrende molto prima e mostra errore.');
+        else bad('Richiesta del flusso fallita: ' + r.err);
+    } else if (r.status === 200 || r.status === 206) {
+        add('✅ Il server risponde HTTP ' + r.status + ' in ' + r.ms + ' ms');
+        if (r.ms > 8000) bad('Il primo dato arriva dopo ' + Math.round(r.ms / 1000) + ' s: VLC mobile va in timeout con attese così lunghe. Aspetta che il torrent si scaldi e riprova.');
+        const ct = seerHdr(r.headers, 'content-type');
+        const cl = seerHdr(r.headers, 'content-range') || seerHdr(r.headers, 'content-length');
+        add('   Content-Type: ' + (ct || '(assente)') + (cl ? ' · ' + cl : ''));
+        if (r.status === 200) add('⚠️ Il server ignora le richieste Range: il salto avanti/indietro in VLC potrebbe non funzionare.');
+        const sn = seerSniff(r.body);
+        if (sn.kind === 'video') add('✅ Contenuto riconosciuto: ' + sn.label);
+        else if (sn.kind === 'text') {
+            let snippet = '';
+            try { snippet = new TextDecoder().decode(new Uint8Array(r.body).slice(0, 200)).replace(/\s+/g, ' ').trim(); } catch (e) {}
+            bad('Il server restituisce testo invece di un video (' + (snippet || 'vuoto') + '). VLC lo legge come "flusso non valido".');
+        } else if (sn.kind === 'empty') bad('Risposta vuota: nessun dato video ricevuto.');
+        else add('⚠️ Contenuto non riconosciuto (' + sn.label + '): potrebbe essere un formato raro o un file cifrato.');
+    } else if (r.status === 401 || r.status === 403) bad('Il flusso richiede il login (HTTP ' + r.status + '): imposta utente/password in Impostazioni › TorrServer.');
+    else if (r.status === 404) bad('Il server non trova il file (HTTP 404): indice o torrent non validi.');
+    else {
+        let t = '';
+        try { t = new TextDecoder().decode(new Uint8Array(r.body || new ArrayBuffer(0)).slice(0, 160)).replace(/\s+/g, ' ').trim(); } catch (e) {}
+        bad('Il server risponde HTTP ' + r.status + (t ? ': ' + t : '') + '.');
+    }
+
+    /* suggerimenti sui formati pesanti per il telefono */
+    const pool = [S.item && S.item.rawTitle, S.item && S.item.cleanTitle, fname].filter(Boolean).join(' ');
+    const heavy = [];
+    if (/\b(2160p|4k|uhd)\b/i.test(pool)) heavy.push('4K');
+    if (/\b(x265|hevc|h[\s.]?265)\b/i.test(pool)) heavy.push('HEVC');
+    if (/\b10[\s._-]?bit\b/i.test(pool)) heavy.push('10-bit');
+    if (/\b(hdr10\+?|hdr|dolby[\s._-]*vision)\b/i.test(pool)) heavy.push('HDR/DV');
+    if (/\bav1\b/i.test(pool)) heavy.push('AV1');
+    if (/\bremux\b/i.test(pool)) heavy.push('Remux');
+    if (/\b(dts|truehd|atmos)\b/i.test(pool)) heavy.push('audio DTS/TrueHD');
+    if (heavy.length) add('⚠️ Formato pesante per un telefono (' + heavy.join(', ') + '). In VLC: Impostazioni › Video › Accelerazione hardware → prova "Disabilitata" (o "Decodifica completa").');
+
+    add('');
+    if (problems.length) add('👉 Causa probabile: ' + problems[0]);
+    else add('✅ Il server serve il video correttamente. Se VLC dà ancora errore il problema è sul telefono (decoder/rete): prova a incollare in VLC › Apri flusso di rete l\'URL qui sotto.');
+    add('');
+    add('URL per prova manuale in VLC:');
+    add(plain);
+}
+function seerOpenDiag() {
+    const prev = document.getElementById('seer-diag');
+    if (prev) prev.remove();
+    const ov = document.createElement('div');
+    ov.id = 'seer-diag';
+    ov.innerHTML = '<div class="sd-box"><div class="sd-head"><b>🔬 Diagnostica streaming</b><button type="button" class="sd-x" aria-label="Chiudi">×</button></div>' +
+        '<pre class="sd-out"></pre><div class="sd-foot"><button type="button" class="sd-copy">📋 Copia report</button><button type="button" class="sd-again">↻ Ripeti</button></div></div>';
+    const out = ov.querySelector('.sd-out');
+    let text = '';
+    const add = l => { text += l + '\n'; out.textContent = text; out.scrollTop = out.scrollHeight; };
+    const run = () => { text = ''; out.textContent = ''; seerDiagnose(add).catch(e => add('❌ Errore diagnostica: ' + ((e && e.message) || e))); };
+    ov.querySelector('.sd-x').onclick = () => ov.remove();
+    ov.querySelector('.sd-again').onclick = run;
+    ov.querySelector('.sd-copy').onclick = () => {
+        try {
+            if (typeof GM_setClipboard !== 'undefined') GM_setClipboard(text);
+            else if (navigator.clipboard) navigator.clipboard.writeText(text);
+            toast('Report copiato', 'ok', 2000);
+        } catch (e) {}
+    };
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+    run();
 }
 function promptVlcFallback(uri, item, reason) {
     seerStopPlayWatchdog();
@@ -4681,8 +5274,9 @@ function seerStartPlayWatchdog(fr, token, uri, item) {
 const WEBTOR_URL = 'https://webtor.io/show?magnet=';
 const WEBTOR_SDK = 'https://cdn.jsdelivr.net/npm/@webtor/embed-sdk-js/dist/index.min.js';
 const WEBTOR_USE_PATH = true;
-function openInWebtor(uri, item, opts) {
+function openInWebtorLegacy(uri, item, opts) {
     if (!uri || !/^magnet:/i.test(String(uri))) return;
+    const wbase = String(getPref('webtorBase', '') || '').trim().replace(/\/+$/, '');
     const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     $('seer-trailer-title').textContent = '🌐 ' + ((item && (item.cleanTitle || item.displayTitle)) || 'Webtor');
     const yt = $('seer-trailer-yt');
@@ -4711,11 +5305,123 @@ function openInWebtor(uri, item, opts) {
         ((opts && opts.path && WEBTOR_USE_PATH)
             /* file specifico di un torrent multi-file: SDK in modalita' push con "path" */
             ? '<div id="player"></div><script>window.webtor=window.webtor||[];window.webtor.push({id:"player",magnet:' + js(uri) +
-              ',path:' + js(opts.path) + ',width:"100%",height:"100%"});<\/script>'
+              ',path:' + js(opts.path) + (wbase ? ',baseUrl:' + js(wbase) : '') + ',width:"100%",height:"100%"});<\/script>'
             /* torrent normale: embed originale, come nella 1.4.6 */
-            : '<video id="player" controls src="' + attr(uri) + '" width="100%" height="100%"></video>') +
+            : '<video id="player" controls src="' + attr(uri) + '"' + (wbase ? ' data-config="' + attr(JSON.stringify({ baseUrl: wbase })) + '"' : '') + ' width="100%" height="100%"></video>') +
         '<script>' + spy + '<\/script></body></html>';
     seerStartPlayWatchdog(fr, token, uri, item);
+    if (item) {
+        markSeen(item, true);
+        trackDl(item, [uri], 'webtor');
+    }
+}
+
+/* MIRSEER-TSPLAYER-PATCH: "Guarda nel browser" via TorrServer (webtor.io ha disattivato l'embed sui siti di terzi) */
+function openInWebtor(uri, item, opts) {
+    if (!uri || !/^magnet:/i.test(String(uri))) return;
+    /* chi ha un Webtor proprio (preferenza webtorBase) continua a usare l'SDK con il suo baseUrl */
+    if (String(getPref('webtorBase', '') || '').trim()) return openInWebtorLegacy(uri, item, opts);
+    let base = String(getPref(VLC_PREF_KEY, '') || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(base)) {
+        const ans = window.prompt(
+            'Il player Webtor incorporato non e\' piu\' disponibile (webtor.io ha disattivato l\'embed sui siti di terzi).\n\n' +
+            'Per guardare nel browser serve TorrServer (lo stesso usato per VLC).\n' +
+            'Inserisci il suo indirizzo (verra\' salvato):', 'http://127.0.0.1:8090');
+        if (ans && /^https?:\/\//i.test(ans.trim())) {
+            setPref(VLC_PREF_KEY, ans.trim());
+            base = ans.trim().replace(/\/+$/, '');
+        } else return openInWebtorLegacy(uri, item, opts);
+    }
+    return openInTorrServerPlayer(uri, item, opts, base);
+}
+async function openInTorrServerPlayer(uri, item, opts, base) {
+    const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const js = s => JSON.stringify(s).replace(/</g, '\\u003c');
+    const idx = (opts && opts.index) || 1;
+    const name = (opts && opts.fileName)
+        ? (String(opts.fileName).replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || vlcSafeName(item, uri))
+        : vlcSafeName(item, uri);
+    /* niente user:pass nell'URL: Chrome blocca le credenziali incorporate nei sotto-richieste (video) */
+    const url = base + '/stream/' + encodeURIComponent(name) + '?link=' + encodeURIComponent(uri) + '&index=' + idx + '&play';
+
+    $('seer-trailer-title').textContent = '🌐 ' + ((item && (item.cleanTitle || item.displayTitle)) || 'Player');
+    const yt = $('seer-trailer-yt');
+    yt.href = url;
+    yt.textContent = 'Apri stream ↗';
+    $('seer-trailer-overlay').style.display = 'flex';
+    const fr = $('seer-trailer-frame');
+    /* il <video> del browser non permette di scegliere traccia audio / sottotitoli incorporati: VLC si' */
+    let vb = document.getElementById('seer-ts-vlc');
+    if (!vb) {
+        vb = document.createElement('button');
+        vb.id = 'seer-ts-vlc';
+        vb.type = 'button';
+        vb.style.cssText = 'border:1px solid rgba(255,255,255,.22);border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap';
+        yt.insertAdjacentElement('beforebegin', vb);
+    }
+    vb.textContent = '🎧 Audio/Sub (VLC)';
+    vb.title = 'Scegli traccia audio e sottotitoli: apre lo stesso file in VLC';
+    vb.style.display = '';
+    vb.style.background = 'rgba(255,255,255,.1)';
+    vb.style.color = '#fff';
+    vb.onclick = () => { closeTrailer(); triggerVlcHandoff(uri, item, false, opts); };
+
+    /* pagina https + server http NON locale (es. IP Tailscale 100.x o nome MagicDNS in http) = contenuto misto:
+       il browser blocca il <video> in questa pagina, ma permette di aprire lo stesso URL in una scheda a parte */
+    const loopback = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(base);
+    const mixed = location.protocol === 'https:' && /^http:\/\//i.test(base) && !loopback;
+
+    const token = 'sp' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    fr.dataset.seerTok = token;
+    fr.srcdoc = '<!doctype html><html><body style="margin:0;height:100%;background:#000;color:#cbd5e1;font:15px system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">Preparo il torrent…</body></html>';
+    const added = await Promise.race([seerPreAddTorrent(base, uri, name), sleep(20000).then(() => false)]);
+    if (fr.dataset.seerTok !== token || $('seer-trailer-overlay').style.display !== 'flex') return; /* chiuso o sostituito nel frattempo */
+    if (!added) toast('⚠ TorrServer non ha confermato il torrent: provo comunque a riprodurre', '', 3500);
+
+    if (mixed) {
+        /* nella scheda (navigazione di primo livello) le credenziali nell'URL sono ammesse */
+        const tabUrl = tsAuthUrl(url);
+        yt.href = tabUrl;
+        fr.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><style>' +
+            'body{margin:0;height:100vh;background:#000;color:#e2e8f0;font:15px/1.5 system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;box-sizing:border-box}' +
+            'a.b{background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;text-decoration:none;font-weight:700;padding:14px 26px;border-radius:12px}' +
+            'small{opacity:.65;max-width:580px}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head><body>' +
+            '<div>Il torrent è pronto sul tuo TorrServer.</div>' +
+            '<a class="b" href="' + attr(tabUrl) + '" target="_blank" rel="noopener">▶ Apri il video in una nuova scheda</a>' +
+            '<small>Qui dentro il browser blocca i video da indirizzi <code>http</code> (contenuto misto). Per vederlo in questa finestra serve un indirizzo <b>https</b> per TorrServer: ' +
+            'sul server esegui per esempio <code>tailscale serve --bg 8090</code> e nelle impostazioni di MirSeer usa <code>https://nome-macchina.tuo-tailnet.ts.net</code>.</small>' +
+            '</body></html>';
+        if (item) { markSeen(item, true); trackDl(item, [uri], 'webtor'); }
+        return;
+    }
+
+    /* il <video> inoltra al parent gli eventi, nello stesso formato letto dal watchdog */
+    const spy = '(function(){var T=' + js(token) + ',P=window.parent,v=document.getElementById("v");' +
+        'function send(k,n,d){try{P.postMessage({seerPlay:T,kind:k,name:n,data:d},"*")}catch(x){}}' +
+        'v.addEventListener("loadedmetadata",function(){send("inited","inited","")});' +
+        'v.addEventListener("error",function(){send("error","error","code "+(v.error?v.error.code:0))});' +
+        'v.addEventListener("waiting",function(){send("status","player status","buffering")});' +
+        /* audio non decodificabile (AC3/E-AC3/DTS): Chrome espone webkitAudioDecodedByteCount, Firefox mozHasAudio */
+        'var chk=0;v.addEventListener("playing",function(){send("status","player status","playing");if(chk)return;' +
+        'chk=setInterval(function(){if(v.paused||v.ended)return;if(v.currentTime>5){clearInterval(chk);' +
+        'var na=(typeof v.webkitAudioDecodedByteCount==="number"&&v.webkitAudioDecodedByteCount===0)||v.mozHasAudio===false;' +
+        'if(na)send("noaudio","noaudio","")}},1000)});})();';
+    fr.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><style>' +
+        'html,body{margin:0;height:100%;background:#000;overflow:hidden}video{width:100%;height:100%;background:#000;outline:0;display:block}' +
+        '</style></head><body><video id="v" controls autoplay playsinline preload="auto" src="' + attr(url) + '"></video>' +
+        '<script>' + spy + '<\/script></body></html>';
+    const onNoAudio = e => {
+        const d = e.data;
+        if (!d || d.seerPlay !== token || d.kind !== 'noaudio' || e.source !== fr.contentWindow) return;
+        window.removeEventListener('message', onNoAudio);
+        vb.style.background = '#f59e0b';
+        vb.style.color = '#111';
+        toast('🔇 Il browser non decodifica questo audio (probabile AC3/E-AC3/DTS). Usa «Audio/Sub (VLC)» per audio e sottotitoli.', '', 9000);
+    };
+    window.addEventListener('message', onNoAudio);
+    seerStartPlayWatchdog(fr, token, uri, item);
+    /* avvio a freddo di un torrent: puo' servire piu' tempo dei 8s del player Webtor */
+    if (seerPlayWd) seerPlayWd.timer = setTimeout(() => promptVlcFallback(uri, item, 'Il video non si e\' avviato: nessun peer disponibile o TorrServer non raggiungibile.'), 60000);
     if (item) {
         markSeen(item, true);
         trackDl(item, [uri], 'webtor');
@@ -4728,7 +5434,7 @@ function seerAskPlayer(why, cb) {
     const old = document.getElementById('seer-play-choice');
     if (old) old.remove();
 
-    const vlcMode = getPref('vlcMode', 'scheme');
+    const vlcMode = (IS_COARSE ? 'm3u' : getPref('vlcMode', 'scheme'));
     const isScheme = vlcMode !== 'm3u';
     const rec = why.length ? 'vlc' : 'browser';
 
@@ -4879,7 +5585,7 @@ function fpTsPost(base, body, timeout) {
         if (typeof GM_xmlhttpRequest !== 'function') return resolve(null);
         GM_xmlhttpRequest({
             method: 'POST', url: base + '/torrents', timeout,
-            headers: { 'Content-Type': 'application/json' },
+            headers: tsHeaders({ 'Content-Type': 'application/json' }),
             data: JSON.stringify(body),
             onload: r => {
                 if (r.status < 200 || r.status >= 300) return resolve(null);
@@ -4954,21 +5660,23 @@ function fpParse(files, all) {
     return out;
 }
 
+/* MIRSEER-VLCONLY-PATCH: la riproduzione nel browser e' stata rimossa, si usa solo VLC (via TorrServer) */
 function seerPlayChosen(choice, uri, item, opts) {
-    if (choice === 'vlc') triggerVlcHandoff(uri, item, false, opts);
-    else if (choice === 'vlc-m3u') triggerVlcHandoff(uri, item, true, opts);
-    else openInWebtor(uri, item, opts);
+    triggerVlcHandoff(uri, item, choice === 'vlc-m3u', opts);
 }
-/* flusso classico: chiede solo il player */
 function seerPlayDirect(uri, item, opts) {
-    seerAskPlayer(browserIncompatReasons(item, uri), choice => seerPlayChosen(choice, uri, item, opts));
+    seerPlayChosen('vlc', uri, item, opts);
+}
+/* chiunque chiamasse ancora il vecchio player nel browser finisce su VLC (l'ultima dichiarazione vince) */
+function openInWebtor(uri, item, opts) {
+    triggerVlcHandoff(uri, item, false, opts);
 }
 
 function seerOpenFilePicker(uri, item) {
     const prev = $('seer-filepick');
     if (prev) prev.remove();
     const why = browserIncompatReasons(item, uri);
-    let mode = why.length ? 'vlc' : 'browser';
+    let mode = 'vlc';
     let closed = false;
     let list = [];
     const title = (item && (item.cleanTitle || item.displayTitle)) || (typeof magnetDn === 'function' ? magnetDn(String(uri)) : '') || 'Torrent';
@@ -4979,7 +5687,7 @@ function seerOpenFilePicker(uri, item) {
         '<div class="fp-box">' +
         '<div class="fp-head"><div><div class="fp-kicker">Scegli cosa riprodurre</div><div class="fp-title">' + esc(title) + '</div></div>' +
         '<button class="fp-x" title="Chiudi">✕</button></div>' +
-        '<div class="fp-tools"><div class="fp-seg"><button data-m="vlc">▶ VLC</button><button data-m="browser">🌐 Browser</button></div>' +
+        '<div class="fp-tools"><div class="fp-seg"><button data-m="vlc">▶ VLC</button></div>' +
         '<input class="fp-search" type="text" placeholder="Cerca nei file…" style="display:none"></div>' +
         '<div class="fp-hint"></div>' +
         '<div class="fp-body"><div class="fp-state"><div class="fp-spin"></div><div>Leggo l\'elenco dei file nel torrent…</div><small>La prima volta può richiedere qualche secondo</small></div></div>' +
@@ -5553,12 +6261,13 @@ async function cmpDiscoverVersions(item) {
     if (sectionKindOf(item.type) !== 'video') return;
     const key = verTitleKey(item);
     if (cmpDiscovered.has(key)) return;
-    const q = String(item.cleanTitle || '').replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    let q = String(verClean(item) || item.cleanTitle || '').replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    if (!(item.meta && item.meta.season)) q = q.replace(/\s+(?:parte|part|capitolo|chapter)\s+(?:\d{1,2}|uno|due|tre|quattro|cinque|i{1,3}|iv|v)$/i, '').trim() || q;
     if (q.length < 2) return;
     const sec = sectionList.find(x => x.name === item.type);
     const sc = { label: item.type, fids: sec && sec.fid ? [String(sec.fid)] : allScope().fids, relaxed: true, fallbackType: item.type, mode: 'all' };
     let url = buildSearchUrl(q, sc.fids), pages = 0, ok = false;
-    while (url && pages < 3) {
+    while (url && pages < 4) {
         let res = null;
         for (let t = 0; t < 3; t++) {
             try { res = await fetchSearchPage(url, sc); } catch (e) { res = null; }
@@ -6335,7 +7044,7 @@ function renderMagnetUI(item) {
         list.innerHTML = mags.map((m, i) =>
             `<div class="seer-magnet-item"><span class="seer-magnet-label" title="${esc(m.dn || '')}">${esc(m.label)}</span><span class="seer-swm" data-swi="${i}"></span>` +
             `<span style="display:flex; gap:6px; flex-shrink:0;">` +
-            (isVideo ? `<button class="seer-magnet-webtor" data-mwebtor="${i}" title="Riproduci: browser se compatibile, altrimenti VLC">▶ Play</button>` : '') +
+            (isVideo ? `<button class="seer-magnet-webtor" data-mwebtor="${i}" title="Riproduci con VLC">▶ Play</button>` : '') +
             (tc ? `<button class="seer-magnet-copy" data-ms="${i}" title="Invia a ${esc(tcName())}">⬇️</button>` : '') +
             `<button class="seer-magnet-copy" data-mi="${i}">${magnetItemLabel()}</button></span></div>`
         ).join('');
@@ -6424,7 +7133,7 @@ async function refreshSeriesMagnets(item) {
     const oldKeys = (item.magnets || []).map(m => magnetKey(m.uri)).join('|');
     const newKeys = found.map(m => magnetKey(m.uri)).join('|');
     if (oldKeys === newKeys) return false;
-    item.magnets = found;
+    item.magnets = seerRelabel(item, found);
     item.magnet = found[0].uri;
     saveCache(item);
     try { renderMagnetUI(item); } catch (e) {}
@@ -6441,7 +7150,7 @@ async function openDetailModal(item, keepVersions = false) {
 
     if (!keepVersions && currentModalItem !== item) dlReset();
     currentModalItem = item;
-    if (!keepVersions) modalVersions = versionsFor(item);
+    if (!keepVersions) { modalVersions = versionsFor(item); seerDiscoverFor(item, myToken); }
     modalWindow.classList.remove('is-landscape', 'is-portrait');
 
     currentTopicUrl = null;
@@ -6512,6 +7221,7 @@ function closeTrailer() {
     if (typeof seerStopPlayWatchdog === 'function') seerStopPlayWatchdog(); /* MIRSEER-PLAY-PATCH */
     $('seer-trailer-frame').removeAttribute('srcdoc'); /* MIRSEER-WEBTOR-INLINE: ferma il player */
     $('seer-trailer-frame').src = 'about:blank';
+    const vlcB = document.getElementById('seer-ts-vlc'); if (vlcB) vlcB.style.display = 'none';
     ov.style.display = 'none';
 }
 
@@ -6764,14 +7474,19 @@ function warmRatings(items) {
     });
 }
 
-function stackVersions(sorted, pred) {
-    const keys = versionKeyMap(sorted);
+function stackVersions(sorted, pred, extra, earlier) {
+    const pool = (extra && extra.length) ? uniqById([...sorted, ...extra]) : sorted;
+    const keys = versionKeyMap(pool);
+    const hide = new Set();
+    (earlier || []).forEach(e => hide.add(keys.get(e)));
     const groups = new Map();
-    sorted.forEach(it => {
+    pool.forEach(it => {
         const k = keys.get(it);
         if (!groups.has(k)) groups.set(k, []);
         groups.get(k).push(it);
     });
+    seerLastSig = pool.length + ':' + groups.size;
+    seerWarmIds(pool);
     const out = [];
     const emitted = new Set();
     sorted.forEach(it => {
@@ -6779,6 +7494,7 @@ function stackVersions(sorted, pred) {
         const arr = groups.get(k);
         arr.forEach(x => { x._vers = arr.length > 1 ? arr : null; });
         if (emitted.has(k)) return;
+        if (hide.has(k)) return;
         if (pred && !pred(it)) return;
         emitted.add(k);
         out.push(it);
@@ -6897,7 +7613,7 @@ function renderRelPanel() {
     updateRelHint();
     if (!on) { p.innerHTML = ''; return; }
 
-    const relPool = rel.sq ? rel.sq.items : rel.items;
+    const relPool = (rel.sq ? rel.sq.items : rel.items).filter(it => !isNotRelease(it)); /* MIRSEER-RELPAGE-PATCH */
     const cnt = { all: relPool.length, film: 0, series: 0, other: 0 };
     relPool.forEach(it => { cnt[relCatOf(it)]++; });
     const totalTxt = rel.total > 0
@@ -6999,6 +7715,7 @@ function getVisibleItems() {
         if (view.key === 'films') base = base.filter(i => i.type === 'Film');
         if (view.key === 'series') base = base.filter(i => i.type === 'Serie TV');
     }
+    if (view.key !== 'project' || search.active) base = base.filter(it => !isNotRelease(it)); /* MIRSEER-MAGNETONLY-PATCH */
     lastBase = base;
     lastBaseCount = base.length;
 
@@ -7008,6 +7725,11 @@ function getVisibleItems() {
     if (!search.active && (view.key === 'favs' || view.key === 'releaser' || view.key === 'project')) {
         sorted.forEach(x => { x._vers = null; });
         return pred ? sorted.filter(pred) : sorted;
+    }
+    if (search.active && !search.fuzzy && isPagedView() && spool.key === PG.key && spool.pages.size > 1) {
+        const extra = [], earlier = [];
+        spool.pages.forEach((its, pg) => { if (pg === PG.page) return; extra.push(...its); if (pg < PG.page) earlier.push(...its); });
+        return stackVersions(sorted, pred, extra, earlier);
     }
     return stackVersions(sorted, pred);
 }
@@ -7119,6 +7841,8 @@ function resTagsHtml(item) {
         .map(k => `<span class="seer-tag ${RES_TAG[k][0]}">${RES_TAG[k][1]}</span>`).join('');
 }
 
+/* locandine TMDb: nelle righe bastano 185px (lista) / 342px (griglia); hero e modal usano l'originale a 500px */
+const seerThumb = (u, grid) => (typeof u === 'string' && u.indexOf('/t/p/w500/') > 0) ? u.replace('/t/p/w500/', grid ? '/t/p/w342/' : '/t/p/w185/') : u;
 function fillRow(row, item) {
     const isProj = item.type === PROJECT_SECTION || item.forumName === PROJECT_SECTION;
     const m = item.meta;
@@ -7178,7 +7902,7 @@ function fillRow(row, item) {
     const icon = kind ? kindIcon(item) : typeIcon(item);
     const hi = row.dataset.hi === '1';
     const posterHtml = item.poster
-        ? `<img class="seer-poster" src="${esc(item.poster)}" alt="" decoding="async" ${hi ? 'fetchpriority="high"' : 'loading="lazy"'} data-seer-id="${esc(item.id)}" data-seer-role="poster" />`
+        ? `<img class="seer-poster" src="${esc(seerThumb(item.poster, grid))}" data-full="${esc(item.poster)}" alt="" decoding="async" ${hi ? 'fetchpriority="high"' : 'loading="lazy"'} data-seer-id="${esc(item.id)}" data-seer-role="poster" />`
         : `<div class="seer-poster-fallback">${icon}</div>`;
 
     const favBtn = `<button class="seer-fav-btn ${fav ? 'on' : ''}" data-fav="1" title="${fav ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${fav ? '★' : '☆'}</button>`;
@@ -7417,18 +8141,23 @@ const uniqById = arr => {
 };
 
 async function loadMain() {
-    main.group = makeGroup([
-        makeCursor(FILM_FORUM_ID, 'Film', false, true),
-        makeCursor(SERIES_FORUM_ID, 'Serie TV', false, true)
-    ], false, MAIN_SUB_EXCLUDE_RE);
-    main.items = uniqById(await pullGroup(main.group));
-    main.exhausted = groupDone(main.group);
+    const defs = homeSecDefs();
+    const allStd = defs.every(homeSecIsStd);
+    const grp = main.group = makeGroup(
+        defs.map(x => makeCursor(x.fid, x.name, !homeSecIsStd(x), true)),
+        !allStd, allStd ? MAIN_SUB_EXCLUDE_RE : SIDE_HIDE_RE);
+    const first = uniqById(await pullGroup(grp));
+    if (main.group !== grp) return;
+    main.items = first;
+    main.exhausted = groupDone(grp);
     main.loaded = true;
 
     main.bg = (async () => {
-        for (let p = 1; settings.heroEnabled && p < INITIAL_PAGES && !groupDone(main.group); p++) {
-            main.items = uniqById([...main.items, ...await pullGroup(main.group)]);
-            main.exhausted = groupDone(main.group);
+        for (let p = 1; settings.heroEnabled && p < INITIAL_PAGES && main.group === grp && !groupDone(grp); p++) {
+            const more = await pullGroup(grp);
+            if (main.group !== grp) return;
+            main.items = uniqById([...main.items, ...more]);
+            main.exhausted = groupDone(grp);
             if (['home', 'films', 'series'].includes(view.key) && !search.active && !isPagedView()) renderDeck(localFilterValue(), true);
         }
     })();
@@ -7454,11 +8183,17 @@ async function loadSection(section, store, pages = 1, fromBg = false) {
 
 async function loadMoreSection() {
     const store = currentSectionStore();
-    $('seer-load-more-btn').innerText = 'Caricamento in corso...';
-    for (let tries = 0; tries < 3 && !store.exhausted; tries++) {
-        const before = store.items.length;
-        await loadSection(view.section, store);
-        if (store.items.length > before) break;
+    if (!store || store.__busy) return;
+    store.__busy = true;
+    try {
+        $('seer-load-more-btn').innerText = 'Caricamento in corso...';
+        for (let tries = 0; tries < 3 && !store.exhausted; tries++) {
+            const before = store.items.length;
+            await loadSection(view.section, store);
+            if (store.items.length > before) break;
+        }
+    } finally {
+        store.__busy = false;
     }
     renderDeck(localFilterValue());
 }
@@ -7590,6 +8325,42 @@ function exitSearchMode(filterQuery = '') {
 }
 
 const PG = { results: 0, page: 1, total: 0, per: PAGE_SIZE, items: [], loading: false, err: '', key: '', want: 0, wantSearch: 0, lastViewPage: 1 };
+const spool = { key: '', pages: new Map(), running: '' };
+const SPOOL_MAX_PAGES = 8;
+/* ricerca: carica in background le altre pagine dei risultati cosi' le versioni dello stesso film si raggruppano tra pagine */
+async function pgGatherSearch(src) {
+    const key = src.key;
+    if (!key.startsWith('s|') || spool.running === key) return;
+    const total = Math.min(PG.total || 1, SPOOL_MAX_PAGES);
+    if (total < 2) return;
+    spool.running = key;
+    let added = false;
+    const same = () => spool.key === key && search.active && !search.fuzzy && PG.key === key;
+    try {
+        for (let p = 1; p <= total && same(); p++) {
+            if (spool.pages.has(p)) continue;
+            const ck = key + '#' + p;
+            let res = pageCache.get(ck);
+            if (!res || Date.now() - res.t > PG_TTL) {
+                res = null;
+                for (let t = 0; t < 3 && same(); t++) {
+                    try { res = await pgFetch(src, p); } catch (e) { res = null; break; }
+                    if (res.flood) { await sleep(2500 * (t + 1)); res = null; continue; }
+                    break;
+                }
+                if (!res) break;
+                pageCache.set(ck, res);
+            }
+            if (!same()) break;
+            spool.pages.set(p, res.items);
+            added = true;
+        }
+    } finally {
+        if (spool.running === key) spool.running = '';
+    }
+    if (added && same() && $('mirseer-app').style.display === 'block') renderDeck(localFilterValue(), true);
+}
+
 const pageCache = new Map();
 const perByKey = new Map();
 const PG_TTL = 180000;
@@ -7613,13 +8384,19 @@ function pgSource() {
     }
     if (view.key === 'releaser' && rel) {
         const base = rel.sq ? relKeywordUrl(rel, rel.sq.query) : relSearchUrl(rel);
-        return { kind: 'search', key: 'r|' + (rel.id || rel.name) + '|' + (rel.sq ? rel.sq.query : ''), url: s0 => base + (s0 ? '&start=' + s0 : ''), type: 'auto', relaxed: true, fallbackType: null };
+        const sSrc = { kind: 'search', key: 'r|' + (rel.id || rel.name) + '|' + (rel.sq ? rel.sq.query : ''), url: s0 => base + (s0 ? '&start=' + s0 : ''), type: 'auto', relaxed: true, fallbackType: null };
+        /* MIRSEER-RELPAGE2-PATCH: senza ricerca per parola, l'elenco viene dalla pagina del sito /releaser/<id> (id risolto in fetch) */
+        const rkey = String(rel.id || rel.name);
+        if (!rel.sq && !relPageBad.has(rkey)) {
+            return { kind: 'relpage', key: 'rp|' + rkey, rkey, rname: rel.name, ruid: rel.id || null, fb: { ...sSrc, key: 'rp|' + rkey }, type: 'auto', relaxed: true, fallbackType: null };
+        }
+        return sSrc;
     }
     if (view.key === 'home') {
         const hUrl = (fid, s0) => `/viewforum.php?f=${fid}&start=${s0}&sk=${f[0]}&sd=${f[1]}&st=0`;
-        const hPart = (fid, type) => { const rl = relWanted(fid); return { kind: 'forum', id: fid, rel: rl, key: 'f|' + fid + '|' + (rl ? 'rel' : f.join('')), url: s0 => hUrl(fid, s0), urlFor: hUrl, sub: false, type, relaxed: false, fallbackType: type }; };
-        const parts = [hPart(FILM_FORUM_ID, 'Film'), hPart(SERIES_FORUM_ID, 'Serie TV')];
-        return { kind: 'home', key: 'h|' + parts.map(p => (p.rel ? 'R' : f.join(''))).join('|'), parts, url: parts[0].url, type: 'auto', relaxed: false, fallbackType: null };
+        const hPart = (fid, type, rlx) => { const rl = relWanted(fid); return { kind: 'forum', id: fid, rel: rl, key: 'f|' + fid + '|' + (rl ? 'rel' : f.join('')), url: s0 => hUrl(fid, s0), urlFor: hUrl, sub: false, type, relaxed: !!rlx, fallbackType: type }; };
+        const parts = homeSecDefs().map(x => hPart(x.fid, x.name, !homeSecIsStd(x)));
+        return { kind: 'home', key: 'h|' + parts.map(p => p.id + (p.rel ? 'R' : f.join(''))).join('|'), parts, url: parts[0].url, type: 'auto', relaxed: false, fallbackType: null };
     }
     let id, type, relaxed;
     if (view.key === 'films') { id = FILM_FORUM_ID; type = 'Film'; relaxed = false; }
@@ -7720,19 +8497,31 @@ function parseReleaseRows(doc) {
             }
         }
         const ue = (found || a.parentElement).querySelector('a[href*="memberlist.php"], .username-coloured, .username');
+        /* MIRSEER-RELPAGE-PATCH: categoria/forum della riga (es. "Stagioni complete", "Cartoon - Serie") */
+        let forumId = null, forumName = '';
+        if (found) {
+            const ca = [...found.querySelectorAll('a[href]')].find(x => {
+                const h = x.getAttribute('href') || '';
+                return /[?&](?:cat|f)=\d+/.test(h) && !/viewtopic/.test(h) && (x.textContent || '').trim().length > 1;
+            });
+            if (ca) {
+                forumId = ((ca.getAttribute('href').match(/[?&](?:cat|f)=(\d+)/) || [])[1]) || null;
+                forumName = (ca.textContent || '').replace(/\s+/g, ' ').trim();
+            }
+        }
         out.push({
             topicId, href: absHref(a), raw: (a.textContent || '').replace(/\s+/g, ' ').trim(), ts,
-            author: ue ? ue.textContent.trim() : '', authorId: ue ? userIdOf(ue) : null
+            author: ue ? ue.textContent.trim() : '', authorId: ue ? userIdOf(ue) : null, forumId, forumName
         });
     });
     return out;
 }
 
-function relPagingTpl(doc, rows, fid) {
+function relPagingTpl(doc, rows, fid, basePath) {
     let total = 0, found = null;
     const consider = (a, n) => {
         let u;
-        try { u = new URL(a.getAttribute('href'), location.origin + '/releases/'); } catch (e) { return; }
+        try { u = new URL(a.getAttribute('href'), location.origin + (basePath || '/releases/')); } catch (e) { return; }
         if (!/release/i.test(u.pathname)) return;
         if (u.searchParams.has('cat') && u.searchParams.get('cat') !== String(fid)) return;
         if (n > total) total = n;
@@ -7800,6 +8589,255 @@ async function buildReleaseItems(recs, type) {
     return order.map(o => o.item || o.rec.item);
 }
 
+/* MIRSEER-RELPAGE-PATCH: elenco release di un releaser = pagina ufficiale del sito /releaser/<id> */
+const relPageBad = new Set();
+function relLabelType(label) {
+    const l = String(label || '');
+    if (!l) return null;
+    if (/cartoon/i.test(l)) return /movie|film/i.test(l) ? 'Cartoon Movies' : 'Cartoon Series';
+    if (/anime/i.test(l)) return /movie|film/i.test(l) ? 'Anime Movies' : 'Anime Series';
+    return sectionByName(l);
+}
+
+async function buildReleaserItems(recs, relName, relId) {
+    const order = [], pending = [];
+    recs.forEach(r => {
+        if (!isReleaseInSection(r.raw)) return;
+        const item = registry.get(r.topicId);
+        if (item) {
+            item.ts = r.ts || item.ts;
+            item.author = item.author || r.author || relName;
+            item.authorId = item.authorId || r.authorId || relId || null;
+            if (r.forumId && !item.forumId) { item.forumId = r.forumId; item.forumName = r.forumName; }
+            order.push({ item });
+        } else {
+            pending.push(r);
+            order.push({ rec: r });
+        }
+    });
+    if (pending.length) {
+        const metas = await workerCall('titles', pending.map(p => p.raw));
+        pending.forEach((rec, i) => {
+            let item = registry.get(rec.topicId);
+            if (!item) {
+                const meta = metas[i];
+                const type = (rec.forumId && forumToSection.get(String(rec.forumId))) || relLabelType(rec.forumName) || (meta.isTvSeries ? 'Serie TV' : 'Film');
+                item = buildItem({ ...rec, type, meta, author: rec.author || relName, authorId: rec.authorId || relId || null, views: 0, replies: 0, lastReplyTs: 0 });
+                if (rec.forumId) { item.forumId = rec.forumId; item.forumName = rec.forumName; }
+                registry.set(rec.topicId, item);
+                hydrateSync(item);
+            }
+            rec.item = item;
+        });
+    }
+    return uniqById(order.map(o => o.item || o.rec.item));
+}
+
+/* MIRSEER-RELPAGE2-PATCH: lettura robusta di /releaser/<id> (id trovato da solo, righe e paginazione adattive, diagnostica) */
+const relPidMap = new Map();
+const REL_PAGE_ID_RE = /\/releaser\/(\d+)/;
+
+async function relFetchDoc(url) {
+    await netGate();
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return new DOMParser().parseFromString(await resp.text(), 'text/html');
+}
+
+function relCountOf(d) {
+    const m = ((d.body && d.body.textContent) || '').match(/(\d[\d.,]*)\s+release\b/i);
+    return m ? parseInt(m[1].replace(/[.,]/g, ''), 10) || 0 : 0;
+}
+
+function relDumpDoc(tag, doc, extra) {
+    try {
+        const hrefs = [...doc.querySelectorAll('a[href]')].map(a => a.getAttribute('href')).filter(Boolean);
+        console.warn('[MirSeer] ' + tag, {
+            title: doc.title, anchors: hrefs.length, sample: hrefs.slice(0, 40),
+            text: ((doc.body && doc.body.textContent) || '').replace(/\s+/g, ' ').slice(0, 400), extra
+        });
+        console.log('[MirSeer] HTML (primi 3000 caratteri):', ((doc.body && doc.body.innerHTML) || '').slice(0, 3000));
+    } catch (e) { /* ignore */ }
+}
+
+/* lettura "larga": qualsiasi link che punti a un topic, anche se la pagina non usa viewtopic.php */
+function relParseLoose(doc) {
+    const out = [], seen = new Set();
+    doc.querySelectorAll('a[href]').forEach(a => {
+        if (a.closest('#mirseer-app, .navbar, .breadcrumbs, #nav-breadcrumbs, .pagination, nav, header, footer')) return;
+        const h = a.getAttribute('href') || '';
+        const m = h.match(/[?&]t=(\d+)/) || h.match(/\/(?:topic|topics|thread|threads|release|releases|post)\/(?:[^\/?#]*?-)?(\d{3,})(?:[\/?#.]|$)/i);
+        const raw = (a.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!m || raw.length < 8 || REL_ONLY_DATE_RE.test(raw)) return;
+        const topicId = m[1];
+        if (seen.has(topicId)) return;
+        seen.add(topicId);
+        const row = a.closest('tr, li, article') || a.parentElement || a;
+        let ts = 0;
+        const te = row.querySelector('time[datetime]');
+        if (te) ts = Date.parse(te.getAttribute('datetime')) || 0;
+        if (!ts) {
+            const dm = (row.textContent || '').match(REL_DATE_RE);
+            if (dm) ts = new Date(+dm[3], +dm[2] - 1, +dm[1], +dm[4], +dm[5]).getTime();
+        }
+        let forumId = null, forumName = '';
+        const ca = [...row.querySelectorAll('a[href]')].find(x => x !== a
+            && /[?&](?:cat|f)=\d+/.test(x.getAttribute('href') || '') && !/viewtopic/.test(x.getAttribute('href') || '')
+            && (x.textContent || '').trim().length > 1);
+        if (ca) {
+            forumId = ((ca.getAttribute('href').match(/[?&](?:cat|f)=(\d+)/) || [])[1]) || null;
+            forumName = (ca.textContent || '').replace(/\s+/g, ' ').trim();
+        } else {
+            const ce = row.querySelector('[class*="cat"], [class*="forum"], [class*="section"]');
+            const t = ce && !ce.contains(a) ? (ce.textContent || '').replace(/\s+/g, ' ').trim() : '';
+            if (t && t.length < 50) forumName = t;
+        }
+        out.push({
+            topicId, href: /viewtopic\.php/.test(h) ? absHref(a) : SITE_ROOT + 'viewtopic.php?t=' + topicId,
+            raw, ts, author: '', authorId: null, forumId, forumName
+        });
+    });
+    return out;
+}
+
+function relParseAny(d) {
+    const r = parseReleaseRows(d);
+    if (!r.length) return relParseLoose(d);
+    if (r.some(x => !x.forumName)) {
+        const lm = new Map(relParseLoose(d).map(x => [x.topicId, x]));
+        r.forEach(x => {
+            if (x.forumName) return;
+            const l = lm.get(x.topicId);
+            if (l && l.forumName) { x.forumId = l.forumId; x.forumName = l.forumName; }
+        });
+    }
+    return r;
+}
+
+function relRemember(src, pid) {
+    const k = String(src.rkey);
+    relPidMap.set(k, pid);
+    try { const m = getPref('relPidMap', {}) || {}; m[k] = pid; setPref('relPidMap', m); } catch (e) { /* ignore */ }
+}
+
+/* id candidati della pagina /releaser/<id>, dal piu' affidabile al meno */
+async function relCandidatePids(src) {
+    const out = [];
+    const add = (id, guess) => {
+        id = id == null ? '' : String(id);
+        if (/^\d+$/.test(id) && !out.some(o => o.id === id)) out.push({ id, guess: !!guess });
+    };
+    const idOfHref = a => ((a.getAttribute('href') || '').match(REL_PAGE_ID_RE) || [])[1];
+    const name = String(src.rname || '');
+    const nl = name.toLowerCase();
+    const mk = String(src.rkey);
+    add(relPidMap.get(mk) || ((getPref('relPidMap', {}) || {})[mk]), false);
+    const ent = relPage.list.find(x => x.name === name);
+    if (ent) add(ent.pid, false);
+    const pl = [...document.querySelectorAll('a[href*="/releaser/"]')]
+        .find(a => !a.closest('#mirseer-app') && (a.textContent || '').trim().toLowerCase() === nl);
+    if (pl) add(idOfHref(pl), false);
+
+    let uid = src.ruid || null;
+    if (!uid && name) { try { uid = await resolveUserId(name); } catch (e) { /* ignore */ } }
+
+    if (!out.length && uid) {
+        try {
+            const d = await relFetchDoc('/memberlist.php?mode=viewprofile&u=' + encodeURIComponent(uid));
+            const a = [...d.querySelectorAll('a[href*="/releaser/"]')][0];
+            if (a) add(idOfHref(a), false);
+        } catch (e) { /* ignore */ }
+    }
+    if (!out.length && nl) {
+        try {
+            const u = await findReleasersUrl();
+            if (u) {
+                const d = await relFetchDoc(u);
+                const a = [...d.querySelectorAll('a[href*="/releaser/"]')].find(x => {
+                    const row = x.closest('tr, li');
+                    return (x.textContent || '').trim().toLowerCase() === nl || (row && (row.textContent || '').toLowerCase().includes(nl));
+                });
+                if (a) add(idOfHref(a), false);
+            }
+        } catch (e) { /* ignore */ }
+    }
+    add(uid, true);
+    return out;
+}
+
+async function relLoadPage(tpl, page) {
+    if (tpl.make) { const d = await relFetchDoc(tpl.make(page)); return { doc: d, recs: relParseAny(d) }; }
+    const per = tpl.per || 25;
+    const pats = [
+        p => tpl.base + '?page=' + p,
+        p => tpl.base + '/page/' + p,
+        p => tpl.base + '?start=' + ((p - 1) * per),
+        p => tpl.base + '?p=' + p,
+        p => tpl.base + '/' + p
+    ];
+    for (const mkUrl of pats) {
+        let d;
+        try { d = await relFetchDoc(mkUrl(page)); } catch (e) { continue; }
+        const r = relParseAny(d);
+        if (r.length && r.some(x => !tpl.first.has(x.topicId))) { tpl.make = mkUrl; return { doc: d, recs: r }; }
+    }
+    throw new Error('paginazione lista release non leggibile');
+}
+
+async function pgFetchReleaserPage(src, page) {
+    const tplKey = 'rp|' + src.rkey;
+    let tpl = relTpl.get(tplKey), doc, recs;
+
+    const resolve = async () => {
+        const cands = await relCandidatePids(src);
+        let lastErr = 'nessun id valido per la pagina del releaser', lastDoc = null;
+        for (const c of cands) {
+            let d;
+            try { d = await relFetchDoc('/releaser/' + encodeURIComponent(c.id)); }
+            catch (e) { lastErr = (e && e.message) || String(e); continue; }
+            const r = relParseAny(d);
+            if (!r.length) {
+                const msg = ((d.querySelector('#message') || d.body || {}).textContent || '').slice(0, 400);
+                if (/presto|soon|flood/i.test(msg)) return { flood: true };
+                lastErr = 'lista release non leggibile (id ' + c.id + ')';
+                lastDoc = d;
+                continue;
+            }
+            if (c.guess && src.rname && !((d.body && d.body.textContent) || '').toLowerCase().includes(String(src.rname).toLowerCase())) {
+                lastErr = 'la pagina ' + c.id + ' non è di ' + src.rname;
+                lastDoc = d;
+                continue;
+            }
+            return { pid: c.id, doc: d, recs: r };
+        }
+        if (lastDoc) relDumpDoc('pagina /releaser non leggibile', lastDoc, { tried: cands.map(x => x.id) });
+        throw new Error(lastErr);
+    };
+
+    if (page === 1 || !tpl) {
+        const r = await resolve();
+        if (r.flood) return { items: [], flood: true, total: tpl ? tpl.total : 1, per: 25, current: page, results: 0, t: Date.now(), rel: true };
+        relRemember(src, r.pid);
+        const base = '/releaser/' + encodeURIComponent(r.pid);
+        tpl = relPagingTpl(r.doc, r.recs.length, '', base);
+        tpl.pid = r.pid;
+        tpl.base = base;
+        tpl.count = relCountOf(r.doc);
+        tpl.first = new Set(r.recs.map(x => x.topicId));
+        relTpl.set(tplKey, tpl);
+        doc = r.doc;
+        recs = r.recs;
+        if (page > 1) { const l = await relLoadPage(tpl, page); doc = l.doc; recs = l.recs; }
+    } else {
+        const l = await relLoadPage(tpl, page);
+        doc = l.doc;
+        recs = l.recs;
+    }
+    const items = await buildReleaserItems(recs, src.rname || '', src.ruid || null);
+    const results = tpl.count && tpl.count >= items.length ? tpl.count : 0;
+    return { items, flood: false, total: tpl.total, per: tpl.per, current: Math.min(page, tpl.total), results, t: Date.now(), rel: true };
+}
+
 async function pgFetchRel(src, page) {
     const fid = String(src.id);
     const load = async url => {
@@ -7857,6 +8895,18 @@ async function pgFetchHome(src, page) {
 
 async function pgFetch(src, page) {
     if (src.kind === 'home') return pgFetchHome(src, page);
+    if (src.kind === 'relpage') {
+        try { return await pgFetchReleaserPage(src, page); }
+        catch (e) {
+            const msg = String((e && e.message) || e);
+            console.warn('[MirSeer] pagina /releaser/ non utilizzabile per ' + src.rname + ': ' + msg + ' - uso la ricerca del forum');
+            try { toast('⚠️ Pagina /releaser/ non letta (' + msg + '): mostro la ricerca del forum. Dettagli nella console (F12).', 'warn'); } catch (e2) { /* ignore */ }
+            if (/leggibile|HTTP 40[34]|nessun id|non è di/.test(msg)) relPageBad.add(String(src.rkey));
+            const r = await pgFetchOne(src.fb, page);
+            delete r.doc;
+            return r;
+        }
+    }
     if (src.kind === 'forum' && src.rel) {
         try { return await pgFetchRel(src, page); }
         catch (e) {
@@ -7950,6 +9000,8 @@ async function loadPage(page, opts = {}) {
     perByKey.set(src.key, PG.per);
     PG.page = Math.min(res.current > 0 ? res.current : page, PG.total);
     PG.items = res.items;
+    if (spool.key !== src.key) { spool.key = src.key; spool.pages = new Map(); }
+    spool.pages.set(PG.page, res.items);
     PG.relOrder = !!res.rel;
     PG.results = res.results || 0;
     if (rel && view.key === 'releaser' && !search.active) {
@@ -7964,6 +9016,7 @@ async function loadPage(page, opts = {}) {
     renderDeck(localFilterValue(), true);
     $('mirseer-app').scrollTop = 0;
     eagerResolve(PG.items);
+    if (search.active && !search.fuzzy) pgGatherSearch(src);
 
     if (pgOpenAfterLoad) {
         const pick = pgOpenAfterLoad === 'first' ? lastDisplayed[0] : lastDisplayed[lastDisplayed.length - 1];
@@ -8010,6 +9063,7 @@ function pgOnSortChange() {
     }
     PG.page = 1;
     PG.lastViewPage = 1;
+    spool.key = ''; spool.pages = new Map();
     loadPage(1, { force: true });
 }
 
@@ -8276,6 +9330,56 @@ body:has(#seer-batch-bar.show) #seer-toasts { bottom: calc(96px + env(safe-area-
 }
 `);
 
+/* MIRSEER-MOBILE-PATCH-3: layout dinamico per telefono (modale in un unico scroll + swipe sull'hero) */
+function seerMobileUI() {
+    const mq = window.matchMedia('(max-width: 820px)');
+    const win = document.querySelector('#seer-modal-overlay .seer-detail-window');
+    if (win) {
+        const art = $('seer-modal-left-art');
+        const right = win.querySelector('.seer-modal-right');
+        const scroll = win.querySelector('.seer-modal-scroll');
+        const foot = win.querySelector('.seer-modal-foot');
+        const actRow = foot && foot.querySelector('.seer-act-row');
+        const cast = $('seer-cast-box');
+        const mids = ['seer-modal-tools', 'seer-dlpath', 'seer-swarm', 'seer-magnet-box'].map($).filter(Boolean);
+        if (art && right && scroll && foot && actRow && cast) {
+            const layout = () => {
+                if (mq.matches) {
+                    /* telefono: artwork + strumenti + lista magnet scorrono con il testo; in basso resta solo la barra azioni */
+                    if (art.parentNode !== scroll) scroll.insertBefore(art, scroll.firstChild);
+                    mids.forEach(n => { if (n.parentNode !== scroll) scroll.insertBefore(n, cast); });
+                    win.classList.add('seer-mob');
+                } else {
+                    if (art.parentNode !== win) win.insertBefore(art, right);
+                    mids.forEach(n => { if (n.parentNode !== foot) foot.insertBefore(n, actRow); });
+                    win.classList.remove('seer-mob');
+                }
+            };
+            layout();
+            if (mq.addEventListener) mq.addEventListener('change', layout); else if (mq.addListener) mq.addListener(layout);
+        }
+    }
+
+    /* hero: swipe orizzontale + l'autoplay riparte da solo (prima un tap lo fermava per sempre) */
+    const hero = $('seer-hero');
+    if (hero) {
+        let sx = 0, sy = 0, ok = false, timer = null;
+        hero.addEventListener('touchstart', e => {
+            const t = e.touches[0];
+            sx = t.clientX; sy = t.clientY;
+            ok = e.touches.length === 1 && !e.target.closest('.seer-hero-chips');
+        }, { passive: true });
+        hero.addEventListener('touchend', e => {
+            const t = e.changedTouches[0];
+            const dx = t.clientX - sx, dy = t.clientY - sy;
+            if (ok && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.5) goHero(heroIdx + (dx < 0 ? 1 : -1));
+            ok = false;
+            clearTimeout(timer);
+            timer = setTimeout(() => { heroHover = false; updateHeroVisibility(); }, 7000);
+        }, { passive: true });
+    }
+}
+
 function mobileEnhance() {
     const app = $('mirseer-app');
     if (!app) return;
@@ -8308,7 +9412,9 @@ function mobileEnhance() {
         { el: $('seer-trailer-overlay'), isOpen: () => $('seer-trailer-overlay').style.display === 'flex', close: () => closeTrailer(), attr: 'style' },
         { el: $('seer-settings-overlay'), isOpen: () => $('seer-settings-overlay').style.display === 'flex', close: () => $('seer-settings-close').click(), attr: 'style' },
         { el: $('seer-modal-overlay'), isOpen: () => $('seer-modal-overlay').style.display === 'flex', close: () => hideModal(), attr: 'style' },
-        { el: sb, isOpen: () => sb.classList.contains('open'), close: () => sb.classList.remove('open'), attr: 'class' }
+        { el: sb, isOpen: () => sb.classList.contains('open'), close: () => sb.classList.remove('open'), attr: 'class' },
+        /* MIRSEER-MOBILE-PATCH-2: the app itself is the bottom layer, so Back closes it instead of leaving the page */
+        { el: app, isOpen: () => app.style.display === 'block', close: () => { const x = $('seer-exit'); if (x) x.click(); }, attr: 'style' }
     ];
     let ignorePop = 0;
     layers.forEach(L => {
@@ -8327,6 +9433,7 @@ function mobileEnhance() {
             }
         }).observe(L.el, { attributes: true, attributeFilter: [L.attr] });
     });
+    { const AL = layers[layers.length - 1]; if (AL.was && !AL.pushed) { try { history.pushState({ seerLayer: 1 }, '', location.href); AL.pushed = true; } catch (e) {} } }
     window.addEventListener('popstate', () => {
         if (ignorePop > 0) { ignorePop--; return; }
         const top = layers.find(L => L.isOpen());
@@ -9931,7 +11038,7 @@ function init() {
                             <div class="seer-magnet-list" id="seer-magnet-list"></div>
                         </div>
                         <div class="seer-act-row">
-                            <button class="seer-action-btn seer-webtor-btn" id="seer-webtor-btn" style="display:none;" title="Riproduci: browser se compatibile, altrimenti VLC"><span>▶</span> Play</button>
+                            <button class="seer-action-btn seer-webtor-btn" id="seer-webtor-btn" style="display:none;" title="Riproduci con VLC"><span>▶</span> Play</button>
                             <button class="seer-action-btn" id="seer-copy-btn"><span>📋</span> Copia Magnet</button>
                             <button class="seer-action-btn" id="seer-send-btn" style="display:none;"><span>⬇️</span> Invia al client torrent</button>
                         </div>
@@ -10028,6 +11135,13 @@ function init() {
                             </div>
                             <select class="seer-settings-select" id="seer-pref-start"></select>
                         </div>
+                        <div class="seer-set-row" style="align-items:flex-start;margin-top:12px;">
+                            <div class="seer-set-text">
+                                <span class="seer-set-label">Sezioni mostrate nella Home</span>
+                                <span class="seer-set-sub">Scegli quali sezioni compongono la Home. Progetti e Collezioni restano separati. Ne serve almeno una.</span>
+                            </div>
+                            <div id="seer-home-secs" style="display:flex;flex-wrap:wrap;gap:6px;flex:1 1 260px;justify-content:flex-end;"></div>
+                        </div>
                     </section>
 
                     <section class="seer-set-group">
@@ -10094,6 +11208,10 @@ function init() {
                             (es. <code>http://nome-server:8090</code> o <code>http://100.x.y.z:8090</code>).
                             Il dispositivo su cui apri VLC deve poter raggiungere quell'indirizzo.
                         </p>
+                        <label class="seer-settings-label" for="seer-ts-user">Utente TorrServer (se l'autenticazione è attiva)</label>
+                        <input type="text" class="seer-settings-input" id="seer-ts-user" autocomplete="off" spellcheck="false" />
+                        <label class="seer-settings-label" for="seer-ts-pass">Password TorrServer</label>
+                        <input type="password" class="seer-settings-input" id="seer-ts-pass" autocomplete="new-password" spellcheck="false" />
                         <div class="seer-settings-status" id="seer-ts-status"></div>
                         <div class="seer-settings-actions">
                             <button class="seer-action-btn" id="seer-ts-test">🔌 Salva e testa connessione</button>
@@ -10179,7 +11297,7 @@ function init() {
         setStatus(k ? 'Chiave TMDb attiva.' : 'Nessuna chiave impostata: TMDb disattivato.');
         syncSettingsUI();
         sOverlay.style.display = 'flex';
-        sInput.focus();
+        if (!IS_COARSE) sInput.focus();
     };
     $('seer-settings-close').onclick = closeSettings;
     sOverlay.onclick = e => { if (e.target === sOverlay) closeSettings(); };
@@ -10216,6 +11334,17 @@ function init() {
     const sHero = $('seer-pref-hero');
     const sHeroSpeed = $('seer-pref-hero-speed');
     const sStart = $('seer-pref-start');
+    const sHomeSecs = $('seer-home-secs');
+    const buildHomeSecs = () => {
+        sHomeSecs.innerHTML = homeSecCandidates().map(x =>
+            `<label style="display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid var(--seer-border);border-radius:999px;cursor:pointer;font-size:12px;"><input type="checkbox" data-hs="${esc(x.name)}" ${settings.homeSections.includes(x.name) ? 'checked' : ''}/>${x.ico} ${esc(x.name)}</label>`
+        ).join('');
+    };
+    sHomeSecs.onchange = () => {
+        const names = [...sHomeSecs.querySelectorAll('input[data-hs]:checked')].map(i => i.dataset.hs);
+        if (!names.length) { toast('Seleziona almeno una sezione', 'warn'); buildHomeSecs(); return; }
+        applyHomeSections(names);
+    };
     const sMagnet = $('seer-pref-magnet');
     const sTc = $('seer-pref-tc');
     const sTcUrl = $('seer-tc-url');
@@ -10246,7 +11375,7 @@ function init() {
     };
 
     const buildStartOptions = () => {
-        sStart.innerHTML = '<option value="home">🏠 Home (Ultime uscite)</option><option value="favs">⭐ Watchlist</option>' +
+        sStart.innerHTML = '<option value="home">🏠 Home (personalizzabile)</option><option value="favs">⭐ Watchlist</option>' +
             sectionList.map(sec => {
                 const v = sec.nav || ('sec:' + sec.name);
                 return `<option value="${esc(v)}" ${(sec.nav || sec.fid) ? '' : 'disabled'}>${sec.ico} ${esc(sec.name)}</option>`;
@@ -10272,6 +11401,7 @@ function init() {
         sHeroSpeed.value = String(settings.heroSpeed);
         sHeroSpeed.disabled = !settings.heroEnabled;
         buildStartOptions();
+        buildHomeSecs();
         sStart.value = settings.startView;
         if (sStart.value !== settings.startView) sStart.value = 'home';
         sMagnet.value = settings.magnetAction;
@@ -10280,8 +11410,11 @@ function init() {
         sTcUser.value = tcUser();
         sTcPass.value = tcPass();
         sTsUrl.value = String(getPref('vlcStreamBase', '') || '');
+        $('seer-ts-user').value = tsUser();
+        $('seer-ts-pass').value = tsPass();
         sTsStatus.textContent = ''; sTsStatus.className = 'seer-settings-status';
-        $('seer-vlc-mode').value = getPref('vlcMode', 'scheme');
+        $('seer-vlc-mode').value = (IS_COARSE ? 'm3u' : getPref('vlcMode', 'scheme'));
+        if (IS_COARSE) { const vm = $('seer-vlc-mode'); const vr = vm.closest('.seer-set-row'); if (vr) vr.style.display = 'none'; } /* MIRSEER-PHONE-M3U */
         sTcUrl.disabled = sTcUser.disabled = sTcPass.disabled = sTcTest.disabled = tcClient() === 'off';
         sTcStatus.textContent = '';
         sTcStatus.className = 'seer-settings-status';
@@ -10350,18 +11483,28 @@ function init() {
     const normTs = v => { v = String(v || '').trim().replace(/\/+$/, ''); if (v && !/^https?:\/\//i.test(v)) v = 'http://' + v; return v; };
     const setTsStatus = (txt, cls = '') => { sTsStatus.textContent = txt; sTsStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
     sTsUrl.onchange = () => { sTsUrl.value = normTs(sTsUrl.value); setPref('vlcStreamBase', sTsUrl.value); };
+    /* MIRSEER-MOBILE-PATCH: salva a ogni tasto (su telefono "change" non scatta se chiudi senza togliere il focus) */
+    const saveTsUser = () => setPref('tsUser', $('seer-ts-user').value.trim());
+    const saveTsPass = () => setPref('tsPass', $('seer-ts-pass').value);
+    $('seer-ts-user').onchange = $('seer-ts-user').oninput = $('seer-ts-user').onblur = saveTsUser;
+    $('seer-ts-pass').onchange = $('seer-ts-pass').oninput = $('seer-ts-pass').onblur = saveTsPass;
+    sTsUrl.oninput = () => setPref('vlcStreamBase', normTs(sTsUrl.value));
     sTsTest.onclick = () => {
         const base = normTs(sTsUrl.value);
         sTsUrl.value = base;
         setPref('vlcStreamBase', base);
+        setPref('tsUser', $('seer-ts-user').value.trim());
+        setPref('tsPass', $('seer-ts-pass').value);
         if (!base) { setTsStatus('Indirizzo rimosso: il Play su VLC chiedera\' l\'indirizzo al primo uso.', ''); return; }
         if (typeof GM_xmlhttpRequest !== 'function') { setTsStatus('Salvato (test non disponibile in questo gestore di userscript).', 'ok'); return; }
         sTsTest.disabled = true;
         setTsStatus('Connessione in corso…');
         const done = (txt, cls) => { setTsStatus(txt, cls); sTsTest.disabled = false; };
         GM_xmlhttpRequest({
-            method: 'GET', url: base + '/echo', timeout: 7000,
-            onload: r => (r.status >= 200 && r.status < 300)
+            method: 'GET', url: base + '/echo', timeout: 7000, headers: tsHeaders(),
+            onload: r => r.status === 401
+                ? done('❌ Server raggiungibile ma credenziali mancanti o errate (401)', 'err')
+                : (r.status >= 200 && r.status < 300)
                 ? done('✅ Server raggiungibile' + (r.responseText ? ': ' + String(r.responseText).trim().slice(0, 40) : ''), 'ok')
                 : done('❌ Risposta HTTP ' + r.status + ' (e\' davvero TorrServer?)', 'err'),
             onerror: () => done('❌ Non raggiungibile: indirizzo errato, server spento, Tailscale disattivo o permesso @connect negato', 'err'),
@@ -10369,13 +11512,15 @@ function init() {
         });
     };
 
-    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'tcPass', 'vlcStreamBase', 'follows', 'tvTrack', 'accent', 'accent2', 'density', 'tmdb_api_key', 'relUrl', 'relBase', 'tcRecentPaths', 'dlLog', 'swipeHint', 'vlcMode'];
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'tcPass', 'vlcStreamBase', 'tsUser', 'tsPass', 'follows', 'tvTrack', 'accent', 'accent2', 'density', 'tmdb_api_key', 'relUrl', 'relBase', 'tcRecentPaths', 'dlLog', 'swipeHint', 'vlcMode', 'homeSections'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
     $('seer-export-btn').onclick = () => {
         try {
             const data = {};
-            BACKUP_KEYS.forEach(k => { const v = getPref(k, undefined); if (v !== undefined) data[k] = v; });
+            const SECRET_KEYS = ['tcUser', 'tcPass', 'tsUser', 'tsPass', 'tmdb_api_key'];
+            const withSecrets = window.confirm('Includere nel backup anche password, utenti e chiave TMDb (in chiaro)?\n\nOK = includi (non condividere il file)\nAnnulla = esporta senza credenziali');
+            BACKUP_KEYS.forEach(k => { if (!withSecrets && SECRET_KEYS.includes(k)) return; const v = getPref(k, undefined); if (v !== undefined) data[k] = v; });
             const payload = { app: 'MirSeer', schema: 1, version: '1.4', exportedAt: new Date().toISOString(), data };
             const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -10449,9 +11594,12 @@ function init() {
             n++;
         }
         if (isStr(d.tcPass)) { setPref('tcPass', d.tcPass); n++; }
+        if (isStr(d.tsUser)) { setPref('tsUser', d.tsUser); n++; }
+        if (isStr(d.tsPass)) { setPref('tsPass', d.tsPass); n++; }
         if (isStr(d.relUrl)) { setPref('relUrl', d.relUrl.trim()); n++; }
         if (isObj(d.relBase)) { setPref('relBase', d.relBase); n++; }
         if (Array.isArray(d.tcRecentPaths)) { setPref('tcRecentPaths', d.tcRecentPaths.filter(x => typeof x === 'string' && x)); n++; }
+        if (Array.isArray(d.homeSections)) { settings.homeSections = normHomeSections(d.homeSections); setPref('homeSections', settings.homeSections); n++; }
         if (typeof d.swipeHint === 'boolean') { setPref('swipeHint', d.swipeHint); n++; }
         if (isObj(d.dlLog)) { Object.assign(dlLog, d.dlLog); saveDlNow(); n++; }
 
@@ -10549,6 +11697,7 @@ function init() {
     const exitApp = () => {
         lastHash = '';
         try { if (location.hash.startsWith(HASH_PREFIX)) history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+        try { $('seer-sidebar').classList.remove('open'); $('seer-user-menu').classList.remove('open'); const em = $('seer-ext-menu'); if (em) em.classList.remove('open'); } catch (e) {}
         app.style.display = 'none';
         fab.style.display = 'flex';
         stopHero();
@@ -10564,6 +11713,7 @@ function init() {
         else if (b.dataset.fid) setView('section', { id: b.dataset.fid, name: b.dataset.name });
     };
     $('seer-nav-brand').onclick = () => setView('home');
+    ['seer-modal-overlay', 'seer-settings-overlay'].forEach(id => { const el = $(id); if (el) { el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); } });
 
     const hero = $('seer-hero');
     hero.onclick = e => {
@@ -10956,7 +12106,7 @@ function init() {
         win.addEventListener('touchstart', e => { const t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY; }, { passive: true });
         win.addEventListener('touchend', e => {
             const t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
-            if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 2 && !e.target.closest('pre, .seer-magnet-list, .seer-text-box')) navModal(dx < 0 ? 1 : -1);
+            if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 2 && !e.target.closest('pre, .seer-magnet-list, .seer-text-box, input, textarea, select, .seer-version-bar, #seer-dlpath') && !(window.getSelection && String(window.getSelection()))) navModal(dx < 0 ? 1 : -1);
         }, { passive: true });
     }
 
@@ -11027,6 +12177,7 @@ function init() {
     renderFacets();
     updateAdv();
     mobileEnhance();
+    try { seerMobileUI(); } catch (e) { console.warn('MirSeer mobile UI', e); }
 }
 
 seerCss(`
@@ -11052,6 +12203,259 @@ seerCss(`
 #seer-cmp .cmp-awards { min-height: 0; }
 `);
 
+seerCss(`
+/* MIRSEER-SPEED-PATCH: backdrop-filter su ogni card e' costoso da disegnare; lo sfondo e' gia' scuro e semitrasparente */
+.seer-fav-btn, .is-card .seer-fav-btn { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-color: rgba(0,0,0,.6); }
+.is-card .seer-fav-btn.on { background-color: rgba(245,158,11,.5); }
+`);
+
+seerCss(`
+/* MIRSEER-MOBILE-PATCH: su telefono 100vh e' piu' alto dell'area visibile -> pulsanti in basso tagliati.
+   100dvh = altezza realmente visibile (si adatta a barra indirizzi e barre di sistema). */
+@supports (height: 100dvh) {
+    @media (max-width: 820px) {
+        #seer-modal-overlay .seer-detail-window,
+        #seer-modal-overlay .seer-detail-window.is-landscape,
+        #seer-modal-overlay .seer-detail-window.is-portrait { height: 100dvh !important; max-height: 100dvh !important; }
+        .seer-settings-window { height: 100dvh; max-height: 100dvh; }
+        #seer-cmp .cmp-box, #seer-fm .fm-box { max-height: 96dvh; }
+    }
+    @media (max-width: 520px) { #seer-filepick .fp-box { max-height: 90dvh; } }
+}
+@media (max-width: 820px) {
+    /* una regola successiva azzerava il padding safe-area del footer: lo ripristino (tasti sopra la barra home) */
+    .seer-modal-foot { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
+    .seer-settings-body { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+    #seer-filepick .fp-box { padding-bottom: env(safe-area-inset-bottom, 0px); }
+}
+`);
+
+seerCss(`
+/* MIRSEER-MOBILE-PATCH-2 */
+#mirseer-app { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* pull-to-refresh / scroll chaining into the forum page from every overlay */
+#seer-modal-overlay, #seer-settings-overlay, #seer-trailer-overlay,
+#seer-cmp, #seer-fm, #seer-filepick, .seer-user-menu, .seer-ext-menu { overscroll-behavior: contain; }
+
+/* bigger invisible hit areas for tiny controls (no layout change) */
+.seer-search-btn, .seer-search-clear, .seer-hero-dot { position: relative; }
+.seer-search-btn { position: absolute; }
+.seer-search-clear { position: absolute; }
+.seer-search-btn::after, .seer-search-clear::after { content: ''; position: absolute; inset: -9px -7px; }
+.seer-hero-dot::after { content: ''; position: absolute; inset: -14px -5px; }
+
+@media (pointer: coarse) {
+    .seer-pg-btn { min-width: 44px; height: 44px; }
+    .seer-sort-select, .seer-search-filter, .seer-adv-input { min-height: 40px; }
+    .seer-action-btn, .seer-hero-btn { min-height: 44px; }
+    .seer-ext-menu a, .seer-user-menu a { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+    #seer-batch-bar button { min-height: 40px; }
+}
+
+/* the floating batch bar covered the last rows of the list */
+body:has(#seer-batch-bar.show) #mirseer-app .seer-content { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+
+/* trailer: respect notch / home bar and never let the 16:9 frame overflow a short (landscape) screen */
+@media (max-width: 980px), (pointer: coarse) {
+    #seer-trailer-overlay {
+        padding: calc(12px + env(safe-area-inset-top, 0px)) calc(12px + env(safe-area-inset-right, 0px))
+                 calc(12px + env(safe-area-inset-bottom, 0px)) calc(12px + env(safe-area-inset-left, 0px));
+    }
+    .seer-trailer-frame { width: min(100%, calc((100vh - 130px) * 16 / 9)); }
+}
+@supports (height: 100dvh) {
+    @media (max-width: 980px), (pointer: coarse) {
+        .seer-trailer-frame { width: min(100%, calc((100dvh - 130px) * 16 / 9)); }
+    }
+}
+
+/* phones in landscape: notch insets + hero that does not eat the whole screen */
+@media (orientation: landscape) and (max-height: 520px) {
+    #mirseer-app { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+    .seer-sidebar { padding-left: env(safe-area-inset-left, 0px); }
+    #seer-hero { height: min(300px, 72vh); }
+    .seer-hero-body { padding-bottom: 36px; }
+}
+`);
+
+seerCss(`
+/* MIRSEER-MOBILE-PATCH-3 */
+
+/* ---------- navbar: second row (section select + search) no longer overflows the screen ---------- */
+@media (max-width: 980px) {
+    .seer-nav .seer-search-wrap { min-width: 0; width: 100%; box-sizing: border-box; gap: 6px; }
+    .seer-nav .seer-search-wrap .seer-search-filter { flex: 0 1 38%; min-width: 0; max-width: 44%; text-overflow: ellipsis; }
+    .seer-nav .seer-search-wrap .seer-search { flex: 1 1 0; min-width: 0; width: 100%; text-overflow: ellipsis; }
+    .seer-content { padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ---------- HERO: height follows the content (no more clipped kicker/text), one stable layout ---------- */
+@media (max-width: 980px) {
+    #seer-hero[style*="block"] { display: grid !important; height: auto !important; min-height: 0; margin-bottom: 22px; border-radius: 16px; }
+    #seer-hero .seer-hero-skel { min-height: 300px; padding: 28px 18px; }
+    #seer-hero .seer-hero-slide {
+        position: relative; inset: auto; grid-area: 1 / 1; min-width: 0;
+        display: flex; flex-direction: column; justify-content: flex-end;
+    }
+    #seer-hero .seer-hero-shade {
+        background: linear-gradient(180deg, rgba(7,9,14,.28) 0%, rgba(7,9,14,.72) 40%, rgba(7,9,14,.96) 100%);
+    }
+    #mirseer-app.seer-light #seer-hero .seer-hero-shade {
+        background: linear-gradient(180deg, rgba(244,246,251,.30) 0%, rgba(244,246,251,.84) 40%, rgba(244,246,251,.97) 100%);
+    }
+    #seer-hero .seer-hero-body { height: auto; width: 100%; margin-top: auto; padding: 96px 16px 42px; box-sizing: border-box; display: block; }
+    #seer-hero .seer-hero-text { max-width: 100%; width: 100%; gap: 10px; }
+    #seer-hero .seer-hero-kicker { align-self: flex-start; max-width: 100%; font-size: 12px; white-space: normal; line-height: 1.3; }
+    #seer-hero .seer-hero-title {
+        margin: 0; font-size: clamp(22px, 7vw, 30px); line-height: 1.12; overflow-wrap: anywhere;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    /* chips: one swipeable row instead of a ragged multi-line block */
+    #seer-hero .seer-hero-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -16px; padding-right: 16px; -webkit-overflow-scrolling: touch; }
+    #seer-hero .seer-hero-chips::-webkit-scrollbar { display: none; }
+    #seer-hero .seer-hero-chips .seer-chip { flex: 0 0 auto; white-space: nowrap; }
+    #seer-hero .seer-hero-label { margin-bottom: -4px; }
+    #seer-hero .seer-hero-desc { -webkit-line-clamp: 3; font-size: 14px; line-height: 1.5; }
+    /* actions: primary full width, the others side by side */
+    #seer-hero .seer-hero-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+    #seer-hero .seer-hero-btn {
+        width: 100%; box-sizing: border-box; min-height: 46px; padding: 0 10px; font-size: 14px;
+        display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; text-align: center;
+    }
+    #seer-hero .seer-hero-btn.primary { grid-column: 1 / -1; }
+    #seer-hero .seer-hero-actions > .seer-hero-btn:nth-child(2):last-child { grid-column: 1 / -1; }
+    #seer-hero .seer-hero-dots { bottom: 14px; }
+}
+
+/* ---------- MODAL (phones): ONE scroll, uncropped artwork, pinned action bar only ---------- */
+@media (max-width: 820px) {
+    #seer-modal-overlay .seer-detail-window { display: flex; flex-direction: column; }
+    #seer-modal-overlay .seer-modal-right { flex: 1 1 auto; min-height: 0; }
+    #seer-modal-overlay .seer-modal-scroll { padding: 0 16px 24px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+
+    /* close button always reachable, even while scrolling */
+    #seer-modal-overlay .seer-modal-close {
+        position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px); right: 12px;
+        width: 42px; height: 42px; font-size: 22px; z-index: 60; background: rgba(0,0,0,.66);
+    }
+
+    /* artwork: full image, never cropped; blurred copy as backdrop; scrolls away with the content */
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-left {
+        width: auto !important; min-width: 0 !important; height: auto !important; min-height: 150px;
+        margin: 0 -16px 16px; padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px 16px;
+        position: relative; overflow: hidden; border: none !important; background: #070b14;
+        display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+    }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-left::before {
+        content: ''; position: absolute; inset: -24px; background-image: var(--seer-art, none);
+        background-size: cover; background-position: center; filter: blur(26px) brightness(.55) saturate(1.3);
+    }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-left::after {
+        content: ''; position: absolute; inset: 0; pointer-events: none;
+        background: linear-gradient(180deg, rgba(15,22,38,0) 62%, #0f1626 100%);
+    }
+    #mirseer-app.seer-light #seer-modal-overlay .seer-modal-scroll .seer-modal-left::after {
+        background: linear-gradient(180deg, rgba(255,255,255,0) 62%, #fff 100%);
+    }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-left img {
+        position: relative; z-index: 1; width: auto !important; height: auto !important;
+        max-width: 100% !important; max-height: min(46dvh, 420px) !important; object-fit: contain !important;
+        border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,.55);
+    }
+    #seer-modal-overlay .seer-modal-title { font-size: 22px; line-height: 1.22; overflow-wrap: anywhere; }
+
+    /* version tabs: horizontal swipe instead of a wall of wrapped buttons */
+    #seer-modal-overlay .seer-ver-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px 8px; -webkit-overflow-scrolling: touch; }
+    #seer-modal-overlay .seer-ver-tabs::-webkit-scrollbar { display: none; }
+    #seer-modal-overlay .seer-ver-tab { flex: 0 0 auto; max-width: 78vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* tools (watchlist / seen / folder / follow / link) now inside the scroll area, 2 per row */
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-tools .seer-tool-btn {
+        flex: 1 1 calc(50% - 8px); min-height: 44px; padding: 8px 10px; font-size: 13px; justify-content: center; white-space: nowrap;
+    }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-tools .seer-ext-wrap { flex: 1 1 100%; margin: 0; position: relative; }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-tools .seer-ext-wrap .seer-tool-btn { width: 100%; }
+    #seer-modal-overlay .seer-modal-scroll .seer-modal-tools .seer-tvinfo { flex: 1 1 100%; }
+    #seer-modal-overlay .seer-modal-scroll .seer-ext-menu {
+        top: calc(100% + 6px) !important; bottom: auto !important; left: 0 !important; right: 0 !important; width: auto; max-width: none;
+    }
+    #seer-modal-overlay .seer-modal-scroll .seer-dlpath { margin: 0 0 12px; display: flex; align-items: center; gap: 6px; }
+    #seer-modal-overlay .seer-modal-scroll .seer-dlpath[hidden] { display: none !important; }
+    #seer-modal-overlay .seer-modal-scroll .seer-dlpath input { flex: 1 1 auto; min-width: 0; min-height: 44px; }
+    #seer-modal-overlay .seer-modal-scroll .seer-dlpath button { min-width: 44px; min-height: 44px; }
+    #seer-modal-overlay .seer-modal-scroll .seer-swarm { margin: 0 0 12px; }
+
+    /* torrent / episode list: name first (up to 3 lines), then seed chips, then 3 equal buttons.
+       Nothing is covered or cut any more. */
+    #seer-modal-overlay .seer-modal-scroll .seer-magnet-box { margin: 6px 0 18px !important; }
+    #seer-modal-overlay .seer-modal-scroll .seer-magnet-list { max-height: none !important; overflow: visible; padding-right: 0; gap: 10px; }
+    #seer-modal-overlay .seer-modal-scroll #seer-send-all-btn {
+        position: sticky; top: 8px; z-index: 8; width: 100%; min-height: 48px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    }
+    #seer-modal-overlay .seer-magnet-item { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-radius: 12px; }
+    #seer-modal-overlay .seer-magnet-item .seer-magnet-label {
+        flex: 1 1 100%; min-width: 0; white-space: normal; text-overflow: clip; overflow-wrap: anywhere;
+        font-size: 14px; line-height: 1.35;
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    #seer-modal-overlay .seer-magnet-item .seer-swm { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+    #seer-modal-overlay .seer-magnet-item > span:last-child {
+        flex: 1 1 100%; display: grid !important; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px !important;
+    }
+    #seer-modal-overlay .seer-magnet-item .seer-magnet-copy,
+    #seer-modal-overlay .seer-magnet-item .seer-magnet-webtor {
+        min-height: 42px; padding: 0 8px; font-size: 13px; white-space: nowrap;
+        display: inline-flex; align-items: center; justify-content: center;
+    }
+
+    /* pinned bottom bar: only the primary actions, hidden when there is nothing in it */
+    #seer-modal-overlay .seer-modal-foot {
+        padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)) !important; gap: 0; box-shadow: 0 -10px 30px rgba(0,0,0,.3);
+    }
+    #seer-modal-overlay .seer-modal-foot:not(:has(.seer-act-row > :not([style*="none"]))) { display: none; }
+    #seer-modal-overlay .seer-modal-foot .seer-act-row { gap: 8px; }
+    #seer-modal-overlay .seer-modal-foot .seer-act-row .seer-action-btn {
+        flex: 1 1 calc(50% - 8px); min-height: 46px; font-size: 14px; white-space: normal; text-align: center; justify-content: center;
+    }
+}
+`);
+
+seerCss(`
+/* MIRSEER-STREAM-PATCH */
+#seer-vlcbusy {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    z-index: 2147483647; background: rgba(15,22,38,.96); color: #e2e8f0; border: 1px solid rgba(255,255,255,.18);
+    padding: 12px 18px; border-radius: 999px; font: 700 14px/1.2 system-ui, sans-serif; box-shadow: 0 10px 30px rgba(0,0,0,.5); max-width: 92vw; text-align: center;
+}
+#seer-diagchip {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    z-index: 2147483647; background: linear-gradient(135deg,#6366f1,#a855f7); color: #fff; border: none;
+    padding: 13px 20px; border-radius: 999px; font: 800 14px/1.2 system-ui, sans-serif; box-shadow: 0 10px 30px rgba(99,102,241,.55); max-width: 92vw;
+}
+#seer-launch, #seer-diag {
+    position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    font-family: system-ui, -apple-system, sans-serif; box-sizing: border-box;
+}
+#seer-launch .sl-box { background: #0f1626; color: #f1f5f9; border: 1px solid rgba(255,255,255,.14); border-radius: 18px; padding: 22px 18px; width: min(380px, 100%); text-align: center; display: flex; flex-direction: column; gap: 10px; }
+#seer-launch .sl-ico { font-size: 34px; }
+#seer-launch .sl-t { font-size: 18px; font-weight: 800; }
+#seer-launch .sl-s { font-size: 13px; color: #94a3b8; overflow-wrap: anywhere; }
+#seer-launch button { min-height: 50px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.08); color: #fff; font: 800 15px system-ui, sans-serif; }
+#seer-launch .sl-go { background: linear-gradient(135deg,#6366f1,#a855f7); border-color: transparent; }
+#seer-diag .sd-box { background: #0f1626; color: #e2e8f0; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; width: min(680px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+#seer-diag .sd-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.1); font-size: 16px; }
+#seer-diag .sd-x { width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.1); color: #fff; font-size: 22px; }
+#seer-diag .sd-out {
+    margin: 0; padding: 14px 16px; flex: 1 1 auto; min-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; -webkit-user-select: text; user-select: text; overscroll-behavior: contain;
+}
+#seer-diag .sd-foot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.1); }
+#seer-diag .sd-foot button { flex: 1; min-height: 46px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.08); color: #fff; font: 800 14px system-ui, sans-serif; }
+#seer-diag .sd-copy { background: linear-gradient(135deg,#6366f1,#a855f7) !important; border-color: transparent !important; }
+`);
 const boot = () => {
     seerFlushCss();
     if (!document.body || $('mirseer-fab')) return;
@@ -11061,6 +12465,7 @@ const boot = () => {
         if (started) return;
         started = true;
         try { if (idleId) (window.cancelIdleCallback || clearTimeout)(idleId); } catch (e) {}
+        try { if (getTmdbKey() && !document.querySelector('link[data-seer-pc]')) { const l = document.createElement('link'); l.rel = 'preconnect'; l.href = 'https://image.tmdb.org'; l.dataset.seerPc = '1'; document.head.appendChild(l); } } catch (e) {}
         try { init(); setupPaging(); } catch (e) { console.error('[MirSeer] init failed', e); }
     };
     const pre = () => { start(); if (fab.onclick !== pre) fab.click(); };   /* init() replaces fab.onclick */
