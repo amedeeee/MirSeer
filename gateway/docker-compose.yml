@@ -1,0 +1,30 @@
+services:
+  torrserver:
+    # Remove this service if you already run TorrServer elsewhere and set TORRSERVER_URL in .env
+    image: ghcr.io/yourok/torrserver:latest
+    container_name: torrserver
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./torrserver-data:/opt/ts/db
+
+  gateway:
+    build: .
+    container_name: mirseer-gateway
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      TORRSERVER_URL: ${TORRSERVER_URL:-http://torrserver:8090}
+      TS_USER: ${TS_USER:-}
+      TS_PASS: ${TS_PASS:-}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+      TRANSCODE_MAX_HEIGHT: ${TRANSCODE_MAX_HEIGHT:-1080}
+      X264_PRESET: ${X264_PRESET:-veryfast}
+      RELEASE_ACTION: ${RELEASE_ACTION:-drop}
+    volumes:
+      - gwcache:/cache
+
+volumes:
+  gwcache:
