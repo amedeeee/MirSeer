@@ -3,7 +3,7 @@
 
 ### Catalogo Multimediale di Nuova Generazione per MirCrew Releases
 
-[![Version](https://img.shields.io/badge/version-1.4.8-blueviolet.svg?style=for-the-badge)](https://github.com/amedeeee/MirSeer/releases)
+[![Version](https://img.shields.io/badge/version-1.5.0-blueviolet.svg?style=for-the-badge)](https://github.com/amedeeee/MirSeer/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Tampermonkey Compatible](https://img.shields.io/badge/Tampermonkey-Compatibile-00485B.svg?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Platform: phpBB](https://img.shields.io/badge/Platform-phpBB-B22222.svg?style=for-the-badge&logo=phpbb)](https://mircrew-releases.org)
@@ -40,6 +40,9 @@ Trasforma il forum in un catalogo moderno con design Glassmorphism (tema **Dark 
 
 ▶️ **Streaming su VLC via TorrServer & File Picker**  
 Guarda qualsiasi release in streaming istantaneo alla massima qualità originale (4K UHD, HEVC/H.265, 10-bit, HDR/Dolby Vision e audio lossless DTS/TrueHD/Atmos) direttamente su **VLC Media Player** tramite **TorrServer**. Supporta autenticazione HTTP Basic, selezione automatica del file video principale, **File Picker** interattivo per saghe o pack di serie TV (con avvio di singoli episodi o playlist completa), avvio via protocollo diretto `vlc://` o `.m3u`, copia automatica del link negli appunti e **Diagnostica Streaming** integrata.
+
+🌐 **Player nel Browser (Stream Gateway)**  
+Non vuoi usare VLC? Guarda la release **direttamente nel browser**, anche da smartphone o tablet: un piccolo servizio Docker (il **MirSeer Stream Gateway**) affianca TorrServer, copia il video senza ricodificarlo quando il browser lo supporta (altrimenti lo converte al volo), porta l'audio in AAC stereo e lo serve come HLS. Cambio traccia audio, **sottotitoli testuali caricati mentre guardi**, ripresa dal punto in cui eri rimasto e **nessun problema di sincronia** tra video e audio, nemmeno dopo uno skip. Vedi la [guida dedicata](#-guida-allo-streaming-nel-browser-gateway-docker).
 
 🎭 **Cast, Regia & Filmography Explorer (TMDb)**  
 Nelle schede dettagli di Film e Serie TV compaiono le miniature circolari di regista e cast principale. Cliccando su un nome si apre il **Filmography Explorer** nativo con biografia e filmografia completa, abbinato a un **riscontro in tempo reale su MirCrew** per vedere subito quali titoli sono già disponibili sul forum (con badge dedicati, filtro *Solo su MirCrew* e apertura diretta).
@@ -88,6 +91,8 @@ Scegli e installa l'estensione browser supportata in base al tuo sistema:
 ## 🍿 Guida allo Streaming con VLC & TorrServer
 
 Guarda qualsiasi release del forum in **streaming istantaneo alla massima qualità originale** (4K UHD, HDR, Dolby Vision, tracce audio DTS/TrueHD/Atmos) su **VLC Media Player**, senza attendere il completamento del download nel client torrent.
+
+> 💡 **Preferisci guardare direttamente nel browser, senza VLC?** Salta alla [Guida allo Streaming nel Browser](#-guida-allo-streaming-nel-browser-gateway-docker).
 
 ---
 
@@ -181,6 +186,181 @@ I browser web non supportano nativamente il protocollo BitTorrent né i codec vi
 
 ---
 
+## 🌐 Guida allo Streaming nel Browser (Gateway Docker)
+
+Guarda le release **direttamente nel browser** (PC, smartphone, tablet), senza installare VLC e senza configurare protocol handler. Funziona con un piccolo servizio che gira sul tuo PC, NAS o server: il **MirSeer Stream Gateway**, incluso in questo repository nella cartella [`gateway/`](gateway/).
+
+---
+
+### 💡 Come funziona?
+
+Il browser non sa leggere un torrent né decodificare ogni formato video. Il Gateway fa da ponte:
+
+1. **MirSeer → Gateway:** premendo **`▶ Play`** e scegliendo **🌐 Guarda nel browser (Gateway)**, MirSeer apre il player del Gateway con il magnet della release.
+2. **Gateway → TorrServer:** il Gateway aggiunge il magnet a TorrServer e analizza le tracce del file con `ffprobe` (senza scaricare il file intero).
+3. **Conversione solo se serve:** con `ffmpeg` il Gateway prepara il flusso HLS che il browser riproduce:
+
+| Contenuto del file | Cosa fa il Gateway |
+| :--- | :--- |
+| Video che il tuo browser sa decodificare (H.264, spesso anche HEVC/AV1/VP9) | **Copia** il video senza ricodificarlo: qualità originale, CPU quasi a zero |
+| Video non supportato (H.264 10-bit, MPEG-4, VC-1, HEVC su browser senza decoder, ecc.) | Lo **ricodifica** in H.264 (max 1080p di default, HDR convertito in SDR) |
+| Audio (qualsiasi formato: DTS, TrueHD, E-AC3…) | Convertito in **AAC stereo** |
+
+4. **Video e audio sempre sincronizzati:** escono dallo stesso processo `ffmpeg`. Quando cambi traccia audio o salti in un punto non ancora caricato, il Gateway riparte da lì con un nuovo flusso, senza perdere la sincronia.
+5. **Sottotitoli al volo:** i sottotitoli testuali (SRT, ASS, WebVTT, mov_text) arrivano a blocchi mentre guardi, quindi compaiono quasi subito anche dopo uno skip. Dal menu 💬 puoi correggere la sincronia con i pulsanti *Anticipa / Ritarda* (la regolazione viene ricordata per quel film).
+6. **Pulizia automatica:** quando chiudi il player, il Gateway ferma `ffmpeg` e rilascia il torrent su TorrServer, così puoi eliminarlo dal pannello TorrServer.
+
+> ℹ️ I sottotitoli a immagine (PGS / VobSub) non sono ancora supportati.
+
+---
+
+### 🛠️ Requisiti
+
+1. **Docker** con **Docker Compose** (v2.24 o superiore): [Docker Desktop](https://www.docker.com/products/docker-desktop/) su Windows/macOS, oppure Docker Engine su Linux / NAS.
+2. **MirSeer v1.5.1** (o superiore).
+3. Una release **con seed attivi** (valgono le stesse regole dello streaming su VLC).
+
+> ⚠️ **Nota sulle prestazioni:** quando il video va ricodificato (non copiato), la CPU del server lavora parecchio. Senza GPU, la ricodifica di un 4K può scattare: in quel caso scegli una release H.264/HEVC compatibile oppure usa VLC. L'accelerazione hardware (VAAPI / NVENC) non è ancora implementata.
+
+---
+
+### 🚀 Configurazione Passo-Passo
+
+#### 1. Scarica il Gateway
+```bash
+git clone https://github.com/amedeeee/MirSeer.git
+cd MirSeer/gateway
+```
+*(Senza Git: dalla pagina del repository premi **Code ➔ Download ZIP**, estrai l'archivio e apri la cartella `gateway`.)*
+
+#### 2. Crea il file di configurazione
+```bash
+cp .env.example .env
+```
+Apri `.env` con un editor di testo e imposta almeno il **token**, una password che protegge il tuo Gateway:
+```env
+GATEWAY_TOKEN=scegli-una-password-lunga
+```
+*(Per generarne una casuale: `openssl rand -hex 16`.)*
+
+> 🔒 **Imposta sempre un token.** Senza token, chiunque riesca a raggiungere la porta `8765` può usare il tuo Gateway (aggiungere torrent e occupare la CPU). Il token resta solo nel tuo `.env` e nel browser: non finisce mai nel codice.
+
+#### 3. Avvia
+```bash
+docker compose up -d --build
+```
+Il comando avvia **TorrServer** (interfaccia su `http://localhost:8090`) e il **Gateway** (porta `8765`). Il primo avvio richiede qualche minuto per costruire l'immagine.
+
+Verifica che sia tutto a posto:
+```bash
+curl http://localhost:8765/health
+```
+Dovresti vedere `"ok":true` e `"torrserver":true`.
+
+> 💡 **Hai già TorrServer in esecuzione altrove** (PC, NAS, altro container)? Nel file `.env` imposta il suo indirizzo, raggiungibile dal container:
+> ```env
+> TORRSERVER_URL=http://192.168.1.20:8090
+> TS_USER=
+> TS_PASS=
+> ```
+> (`TS_USER` / `TS_PASS` solo se ha l'autenticazione attiva) e avvia **solo** il Gateway:
+> ```bash
+> docker compose up -d --build gateway
+> ```
+
+#### 4. Collega MirSeer
+1. Apri MirSeer dal forum e clicca sull'icona delle impostazioni **⚙️**.
+2. Trova la sezione **"🌐 Player nel browser (Stream Gateway)"**.
+3. In **Indirizzo del Gateway** inserisci `http://127.0.0.1:8765` (se Docker gira sullo stesso PC) oppure l'IP LAN / Tailscale del server, ad esempio `http://192.168.1.50:8765`.
+4. In **Token** inserisci la stessa password messa in `GATEWAY_TOKEN`.
+5. Premi **"🔌 Salva e testa gateway"**: devi vedere ✅ *Gateway raggiungibile · TorrServer collegato*.  
+*(Se Tampermonkey mostra un avviso di connessione verso quell'indirizzo, clicca su **"Consenti sempre"**.)*
+
+#### 5. Guarda
+Apri una release, premi **`▶ Play`** e scegli **🌐 Guarda nel browser (Gateway)**. Se il Gateway è configurato, il browser viene proposto come scelta consigliata.
+
+---
+
+### 📱 Uso da smartphone o da un altro dispositivo
+
+Basta inserire in MirSeer, sul telefono, l'indirizzo di rete del server (es. `http://192.168.1.50:8765`) al posto di `127.0.0.1`.
+
+> 🔐 **Forum in HTTPS + Gateway in HTTP:** il browser blocca l'incorporamento di una pagina `http` dentro una `https`, quindi il player si apre in una **scheda separata**. Per vederlo direttamente sopra il forum serve un indirizzo **https** per il Gateway. Con [Tailscale](https://tailscale.com/) basta:
+> ```bash
+> tailscale serve --bg 8765
+> ```
+> e usare nelle impostazioni di MirSeer l'indirizzo `https://…` che ti viene mostrato.
+
+> ⚠️ **Non esporre il Gateway su Internet senza token e HTTPS.** Per usarlo fuori casa, la soluzione più sicura è una VPN privata come Tailscale o WireGuard.
+
+---
+
+### 🔄 Aggiornare il Gateway
+
+```bash
+cd MirSeer
+git pull
+cd gateway
+docker compose up -d --build
+```
+
+---
+
+### ⚙️ Impostazioni avanzate (`.env`)
+
+Tutte opzionali. Si modificano nel file `.env`, poi si riavvia con `docker compose up -d`.
+
+| Variabile | Predefinito | Descrizione |
+| :--- | :--- | :--- |
+| `TORRSERVER_URL` | `http://torrserver:8090` | Indirizzo di TorrServer visto dal container |
+| `TS_USER` / `TS_PASS` | vuoti | Credenziali di TorrServer, se ha l'autenticazione attiva |
+| `GATEWAY_TOKEN` | vuoto | Password del Gateway (da inserire anche in MirSeer) |
+| `TRANSCODE_MAX_HEIGHT` | `1080` | Altezza massima quando il video viene ricodificato |
+| `X264_PRESET` | `veryfast` | Velocità/qualità della ricodifica (`ultrafast` = più leggero, `medium` = più qualità) |
+| `RELEASE_ACTION` | `drop` | Cosa fare con il torrent alla chiusura del player: `drop` (lo libera ma resta nell'elenco), `rem` (lo rimuove da TorrServer), `none` |
+| `RUN_IDLE_MIN` | `5` | Minuti di inattività dopo i quali `ffmpeg` viene fermato |
+| `AHEAD_SEGMENTS` | `10` | Quanti segmenti da 6 s precalcolare oltre la posizione attuale |
+
+Elenco completo e dettagli tecnici: [`gateway/README.md`](gateway/README.md).
+
+---
+
+### ❓ Problemi comuni
+
+<details>
+<summary><b>"Salva e testa gateway" dice che non è raggiungibile.</b></summary>
+Controlla che il container sia attivo (<code>docker compose ps</code>), che l'indirizzo e la porta <code>8765</code> siano corretti e che il firewall del server non la blocchi. Se Tampermonkey ha mostrato una richiesta di permesso per quell'indirizzo, l'hai negata: riapri le impostazioni e riprova scegliendo <b>"Consenti sempre"</b>.
+</details>
+
+<details>
+<summary><b>Il test dice "TorrServer NON raggiungibile dal gateway".</b></summary>
+<code>TORRSERVER_URL</code> in <code>.env</code> deve essere un indirizzo raggiungibile <i>dall'interno del container</i>. Con TorrServer avviato dallo stesso <code>docker-compose.yml</code> va bene il valore predefinito (<code>http://torrserver:8090</code>). Se TorrServer gira altrove usa l'IP della macchina (es. <code>http://192.168.1.20:8090</code>), non <code>127.0.0.1</code>, che dentro il container indica il container stesso.
+</details>
+
+<details>
+<summary><b>Il Gateway chiede un token / dice "token errato".</b></summary>
+Il valore in <b>Token</b> nelle impostazioni di MirSeer deve essere identico a <code>GATEWAY_TOKEN</code> nel file <code>.env</code>. Dopo aver modificato <code>.env</code> esegui <code>docker compose up -d</code> per applicare la modifica.
+</details>
+
+<details>
+<summary><b>Il video parte ma a scatti, oppure il ventilatore del server va al massimo.</b></summary>
+Quasi sicuramente il video viene ricodificato (lo indica il pulsante ⚙️ del player: <i>"ricodificato"</i> invece di <i>"copiato senza ricodifica"</i>). Senza GPU un 4K è pesante: scegli una release in 1080p o in un formato che il tuo browser decodifica, abbassa <code>X264_PRESET</code> a <code>ultrafast</code>, oppure usa VLC.
+</details>
+
+<details>
+<summary><b>Non riesco a eliminare il torrent dal pannello di TorrServer dopo aver guardato.</b></summary>
+Aggiorna il Gateway alla versione più recente: alla chiusura del player rilascia il torrent da solo. Se il problema persiste riavvia il Gateway con <code>docker compose restart gateway</code> e riprova a eliminarlo.
+</details>
+
+<details>
+<summary><b>Non vedo i sottotitoli o sono fuori sincrono.</b></summary>
+Apri il menu 💬 del player e scegli la traccia. Sono supportati solo i sottotitoli testuali; quelli a immagine (PGS / VobSub) no. Se sono sfasati di una frazione di secondo, usa i pulsanti <i>Anticipa / Ritarda</i> nello stesso menu.
+</details>
+
+> ⚖️ **Nota legale:** il Gateway è uno strumento tecnico che riproduce ciò che tu gli indichi. Sei l'unico responsabile dei contenuti che guardi e scarichi e del rispetto delle leggi del tuo Paese.
+
+---
+
 ## ⚙️ Configurazione TMDb (Consigliata)
 
 MirSeer funziona anche senza chiavi esterne estraendo locandine e trame direttamente dai post. Inserendo una **API Key gratuita di TheMovieDatabase (TMDb)** si attivano però tutte le funzioni avanzate:
@@ -227,7 +407,12 @@ Controlla i badge seed/leech nella scheda della release: un torrent senza seed s
 
 <details>
 <summary><b>Posso usarlo da un altro dispositivo (es. da telefono verso PC/NAS o tramite Tailscale)?</b></summary>
-Sì! Avvia TorrServer sul PC, server o NAS e inserisci nelle impostazioni di MirSeer sul telefono l'indirizzo di rete del server (es. <code>http://192.168.1.50:8090</code> in LAN oppure l'IP/hostname Tailscale) invece di <code>127.0.0.1</code>.
+Sì! Avvia TorrServer sul PC, server o NAS e inserisci nelle impostazioni di MirSeer sul telefono l'indirizzo di rete del server (es. <code>http://192.168.1.50:8090</code> in LAN oppure l'IP/hostname Tailscale) invece di <code>127.0.0.1</code>. Lo stesso vale per il Gateway del player nel browser (porta <code>8765</code>).
+</details>
+
+<details>
+<summary><b>Meglio VLC o il player nel browser?</b></summary>
+<b>VLC</b> riproduce sempre il file originale, qualunque sia il formato (4K HDR, DTS, Atmos…), senza ricodifica. Il <b>player nel browser</b> non richiede nulla da installare sul dispositivo e funziona ovunque, ma se il video non è decodificabile dal browser il server deve ricodificarlo e un 4K senza GPU può scattare. Puoi scegliere volta per volta dal dialogo <b>▶ Play</b>.
 </details>
 
 ---
