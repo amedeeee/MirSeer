@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MirSeer
 // @namespace    https://github.com/amedeeee/MirSeer
-// @version      1.4.8
+// @version      1.5.0
 // @description  Catalogo Multimediale di Nuova Generazione per MirCrew
 // @author       amedeeee
 // @match        *://*.mircrew-releases.org/*
@@ -14,6 +14,7 @@
 // @connect      mircrew-releases.org
 // @connect      api.themoviedb.org
 // @connect      image.tmdb.org
+// @connect      api.knaben.org
 // @connect      *
 // @run-at       document-end
 // @noframes
@@ -4169,6 +4170,8 @@ async function trRpc(base, user, pass, body) {
 async function sendToClient(item, uris) {
     const client = tcClient(), base = tcBase();
     if (client === 'off' || !base) { toast('Configura prima il client torrent nelle impostazioni ⚙️', 'warn'); return false; }
+    uris = await kbResolve(item, uris); /* MIRSEER-KNABEN-PATCH */
+    if (!uris) return false;
     const custom = (item && item === currentModalItem) ? dlOverride.trim() : '';
     const dir = custom || tvDirFor(item) || tcPathFor(item);
     try {
@@ -4508,7 +4511,13 @@ function paintModalTools(item) {
     box.innerHTML = h;
 }
 
-const verSeason = it => (it.meta && it.meta.season ? it.meta.season.short : '');
+/* MIRSEER-NOSEASON-PATCH: una release di Serie TV senza marcatore di stagione (miniserie / prima stagione)
+   viene trattata come S01, cosi' si raggruppa con le release "Stagione 1". */
+const verSeason = it => {
+    if (it.meta && it.meta.season) return it.meta.season.short;
+    if (it.type === 'Serie TV') return 'S01';
+    return '';
+};
 // Release in sottoforum non mappati (es. "Stagioni complete") hanno type = nome del forum:
 // vanno trattate come video e ricondotte a Film / Serie TV, altrimenti non si raggruppano mai.
 const verIsVideo = it => {
@@ -4535,12 +4544,12 @@ const verClean = it => {
 // il capitolo e' gia' distinto dall'anno, mentre il marcatore spezzava il gruppo
 // ("Dune", "Dune Parte 1", "Dune - Parte due", "Dune Parte 2" = 4 gruppi invece di 2).
 const VER_PART_RE = /\s+(?:parte|part|capitolo|chapter)\s+(?:\d{1,2}|uno|due|tre|quattro|cinque|i{1,3}|iv|v)$/;
-const verStripPart = (t, it) => (it.meta && it.meta.season) ? t : (t.replace(VER_PART_RE, '') || t);
+const verStripPart = (t, it) => verSeason(it) ? t : (t.replace(VER_PART_RE, '') || t);
 const verTitleKey = it => {
     if (!verIsVideo(it)) return 'id:' + it.id;
     const t = verStripPart(normT(verClean(it)), it);
     if (!t) return 'id:' + it.id;
-    return t + '|' + (it.meta && it.meta.season ? '' : (it.fieldYear || it.year || '')) + '|' + verSeason(it) + '|' + verType(it);
+    return t + '|' + (verSeason(it) ? '' : (it.fieldYear || it.year || '')) + '|' + verSeason(it) + '|' + verType(it);
 };
 /* MIRSEER-TMDBGROUP-PATCH: raggruppamento versioni basato sull'ID TMDb.
    Chiave = tmdb:<kind>:<id>|<stagione>|<tipo>. Release senza ID: si agganciano a un ID TMDb tramite i nomi
@@ -4569,7 +4578,7 @@ function verNamesOf(it) {
     return [...out];
 }
 /* anno usato per distinguere i film (le serie sono distinte dalla stagione) */
-const verYearOf = it => (it.meta && it.meta.season) ? '' : String(parseInt(it.fieldYear || it.year, 10) || '');
+const verYearOf = it => verSeason(it) ? '' : String(parseInt(it.fieldYear || it.year, 10) || '');
 /* anni candidati: esatto, poi ±1 (l'anno del forum puo' differire da quello TMDb di uno) */
 const verYearCands = y => {
     if (!y) return [''];
@@ -4805,6 +4814,418 @@ function openMagnet(uri) {
     a.click();
     a.remove();
 }
+
+/* MIRSEER-KNABEN-PATCH: se il magnet di MirCrew ha pochi/zero seed, usa la release migliore trovata su Knaben Database.
+   - kbMode: 'off' | 'auto' (sostituisce da solo) | 'ask' (mostra le alternative e fai scegliere)
+   - kbMin : soglia minima di seed; sotto questa soglia (o se i tracker non rispondono) si cerca su Knaben
+   Vale per: Copia/Apri magnet, Invia al client, Play. Solo per contenuti video.
+   Se il controllo seed fallisce (errore di rete / forum) NON si sostituisce nulla: resta il magnet originale. */
+const KB_V2 = 'https://api.knaben.org/v2/search';
+const KB_V1 = 'https://api.knaben.org/v1';
+const KB_TRACKERS = ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.stealth.si:80/announce', 'udp://tracker.torrent.eu.org:451/announce', 'udp://exodus.desync.com:6969/announce', 'udp://open.demonii.com:1337/announce'];
+const KB_BAD_RE = /\b(cam|camrip|hdcam|hdts|hd ts|ts|telesync|telecine|hdtc|dvdscr|scr|screener|r5|workprint)\b/;
+const KB_VIDEO_RE = /\.(mkv|mp4|m4v|avi|mov|wmv|webm|flv|mpg|mpeg|m2ts|ts)$/i;
+const KB_DANGER_EXT_RE = /\.(exe|scr|msi|msix|bat|cmd|com|pif|lnk|url|vbs|vbe|js|jse|jar|apk|dmg|pkg|app|hta|ps1|wsf|reg|dll|sh|bin|run|zip|rar|7z|r\d\d|z\d\d|gz|tar|xz|cab|iso|img)$/i;
+const KB_DANGER_TITLE_RE = /\.(exe|scr|msi|bat|cmd|com|apk|dmg|zip|rar|7z|iso)(?![a-z0-9])/i;
+const KB_SUSP_RE = /\b(keygen|crack|cracked|activator|installer|codec|password|virus|trojan|loader|downloader|setup exe)\b/;
+const KB_SIGNAL_RE = /\b(2160p|1080p|1080i|720p|576p|480p|4k|uhd|x264|x265|h 26[45]|hevc|av1|xvid|divx|webrip|web dl|webdl|bluray|blu ray|bdrip|brrip|hdrip|dvdrip|hdtv|remux|mkv|mp4|avi)\b/;
+const kbMode = () => { const v = getPref('kbMode', 'off'); return (v === 'auto' || v === 'ask') ? v : 'off'; };
+const kbMin = () => { const n = parseInt(getPref('kbMin', 5), 10); return n >= 1 ? n : 5; };
+const kbCache = new Map();
+const kbNorm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+const kbRes = s => { const m = String(s || '').match(/\b(2160p|4k|uhd|1080p|720p|480p)\b/i); if (!m) return ''; const v = m[1].toLowerCase(); return (v === '4k' || v === 'uhd') ? '2160' : v.replace('p', ''); };
+const kbFmtSize = b => b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : b >= 1048576 ? Math.round(b / 1048576) + ' MB' : '';
+
+function kbIsVideo(item) {
+    if (!item) return false;
+    return effKind(item) === 'video' || (!item.kind && VIDEO_TYPES.has(item.type));
+}
+
+/* Stagione/episodio da una stringa (nome magnet, etichetta...). Ignora i range tipo S02E01-E08. */
+function kbParseEp(str) {
+    str = String(str || '');
+    let m = str.match(/\bS(\d{1,2})[\s._-]*E(\d{1,3})(?!\d)(?![\s._]*(?:-|–|to|a)[\s._]*E?\d)/i);
+    if (m) return { season: +m[1], ep: +m[2] };
+    m = str.match(/\b(\d{1,2})x(\d{2,3})\b/i);
+    if (m) return { season: +m[1], ep: +m[2] };
+    m = str.match(/(?:stagione|season)\s*(\d{1,2})\D{0,14}?(?:ep(?:isodio|isode)?\.?|e)\s*(\d{1,3})(?!\d)/i);
+    if (m) return { season: +m[1], ep: +m[2] };
+    return null;
+}
+
+/* Cosa cercare su Knaben per questo magnet. null = non so costruire una ricerca affidabile (es. serie completa). */
+function kbCtx(item, uri) {
+    const mags = item.magnets || [];
+    const mo = mags.find(x => magnetKey(x.uri) === magnetKey(uri));
+    const titles = [];
+    [item.origTitle, item.cleanTitle].forEach(t => {
+        const t0 = String(t || '').trim(), n = kbNorm(t0);
+        if (t0 && n.length >= 2 && !titles.some(x => x.n === n)) titles.push({ raw: t0, n });
+    });
+    if (!titles.length) return null;
+    const srcs = [mo && mo.dn, magnetDn(uri), mo && mo.label];
+    if (mags.length <= 1) srcs.push(item.rawTitle);
+    const pool = srcs.filter(Boolean).join(' ');
+    const ctx = { titles: titles.slice(0, 2), res: kbRes(pool) || kbRes(item.rawTitle), series: false, season: null, ep: null, year: '', src: pool.slice(0, 160) };
+    const se = item.meta && item.meta.season;
+    if (se || SEASON_SECTIONS.has(item.type)) {
+        ctx.series = true;
+        let p = null;
+        for (const x of srcs) { p = kbParseEp(x); if (p) break; }
+        if (p) { ctx.season = p.season; ctx.ep = p.ep; }
+        else if (se && se.season != null && (se.kind === 'season' || se.kind === 'ep')) {
+            ctx.season = se.season;
+            const lab = String((mo && mo.label) || '').match(/^\s*(?:ep(?:isodio|isode)?\.?|e)\s*(\d{1,3})\s*$/i);
+            if (lab) ctx.ep = +lab[1];
+        } else return null;
+    } else {
+        const ys = [], pm = pool.match(/\b(19\d{2}|20\d{2})\b/);
+        [pm && pm[1], item.fieldYear, item.year, item.tmdbYear].forEach(y => { y = String(parseInt(y, 10) || ''); if (y && !ys.includes(y)) ys.push(y); });
+        ctx.years = ys; ctx.year = ys[0] || '';
+    }
+    return ctx;
+}
+
+function kbNormHit(h) {
+    if (!h || typeof h !== 'object') return null;
+    const title = String(h.title || h.name || h.t || '');
+    let hash = String(h.hash || h.infoHash || h.infohash || h.btih || '').trim();
+    let magnet = String(h.magnetUrl || h.magnet_url || h.magnet || h.magnetLink || '');
+    if (!/^magnet:/i.test(magnet)) {
+        magnet = '';
+        for (const k in h) { if (typeof h[k] === 'string' && /^magnet:/i.test(h[k])) { magnet = h[k]; break; } }
+    }
+    if (!magnet && !hash) { for (const k in h) { if (/hash/i.test(k) && typeof h[k] === 'string' && /^[0-9a-f]{40}$/i.test(h[k].trim())) { hash = h[k].trim(); break; } } }
+    if (!magnet && /^[0-9a-f]{40}$/i.test(hash)) {
+        magnet = 'magnet:?xt=urn:btih:' + hash + '&dn=' + encodeURIComponent(title) + KB_TRACKERS.map(t => '&tr=' + encodeURIComponent(t)).join('');
+    }
+    if (!title) return null;
+    return { title, magnet, seeders: +(h.seeders != null ? h.seeders : (h.seeds != null ? h.seeds : h.s)) || 0, bytes: +h.bytes || +h.size || 0, tracker: String(h.tracker || h.cachedOrigin || ''), category: String(h.category || ''), virus: +h.virusDetection || 0 };
+}
+
+/* API v2 (GET, quella consigliata da Knaben); se la risposta non e' leggibile ripiega sulla v1 (POST) */
+async function kbFetch(q, unsafe, tr) {
+    const ck = q.toLowerCase() + '|' + (unsafe ? 1 : 0);
+    const c = kbCache.get(ck);
+    if (c && Date.now() - c.t < 10 * 60 * 1000) { tr.push(`"${q}" → ${c.hits.length} risultati (cache)`); return c.hits; }
+    const unwrap = j => {
+        if (Array.isArray(j)) return j;
+        if (!j) return null;
+        if (j.hits && Array.isArray(j.hits.hits)) return j.hits.hits.map(x => x._source || x);
+        return j.hits || j.results || j.data || null;
+    };
+    let arr = null;
+    try {
+        const r = await gmRequest({ method: 'GET', url: KB_V2 + '?q=' + encodeURIComponent(q) + '&sf=title&o=seeders&d=desc&s=100' + (unsafe ? '&unsafe' : ''), headers: { 'Accept': 'application/json' }, timeout: 15000 });
+        let j = null; try { j = JSON.parse(r.responseText); } catch (e) { }
+        arr = r.status >= 200 && r.status < 300 ? unwrap(j) : null;
+        tr.push(`v2 "${q}" → HTTP ${r.status}, ${Array.isArray(arr) ? arr.length + ' risultati' : 'risposta non leggibile: ' + String(r.responseText || '').slice(0, 120).replace(/\s+/g, ' ')}`);
+    } catch (e) { arr = null; tr.push(`v2 "${q}" → errore: ${(e && e.message) || e}`); }
+    if (!Array.isArray(arr)) {
+        try {
+            const r = await gmRequest({
+                method: 'POST', url: KB_V1, headers: { 'Content-Type': 'application/json' }, timeout: 15000,
+                data: JSON.stringify({ search_type: '100%', search_field: 'title', query: q, order_by: 'seeders', order_direction: 'desc', size: 100, hide_unsafe: !unsafe, hide_xxx: true })
+            });
+            let j = null; try { j = JSON.parse(r.responseText); } catch (e) { }
+            arr = r.status >= 200 && r.status < 300 ? unwrap(j) : null;
+            tr.push(`v1 "${q}" → HTTP ${r.status}, ${Array.isArray(arr) ? arr.length + ' risultati' : 'risposta non leggibile: ' + String(r.responseText || '').slice(0, 120).replace(/\s+/g, ' ')}`);
+        } catch (e) { tr.push(`v1 "${q}" → errore: ${(e && e.message) || e}`); throw e; }
+        if (!Array.isArray(arr)) throw new Error('risposta Knaben non valida');
+    }
+    if (arr[0] && typeof arr[0] === 'object') tr.push('campi del primo risultato: ' + Object.keys(arr[0]).join(', '));
+    kbCache.set(ck, { t: Date.now(), hits: arr });
+    capMap(kbCache, 60);
+    return arr;
+}
+
+function kbPick(hits, ctx, curSeed, tr) {
+    const min = kbMin();
+    const rxEp = ctx.ep != null ? new RegExp('\\bs0*' + ctx.season + ' ?e0*' + ctx.ep + '(?!\\d)|\\b0*' + ctx.season + 'x0*' + ctx.ep + '(?!\\d)') : null;
+    const rxS1 = (ctx.series && ctx.ep == null) ? new RegExp('\\bs0*' + ctx.season + '\\b|\\bseason 0*' + ctx.season + '\\b') : null;
+    const yset = new Set();
+    (ctx.years || (ctx.year ? [ctx.year] : [])).forEach(y => { const v = +y; [v - 1, v, v + 1].forEach(x => yset.add(x)); });
+    const rxY = yset.size ? new RegExp('\\b(' + [...yset].join('|') + ')\\b') : null;
+    const ex = {};
+    const no = (k, h) => { why[k]++; (ex[k] = ex[k] || []).length < 2 && ex[k].push(h.title.slice(0, 70) + (h.category ? ' {' + h.category + '}' : '')); };
+    const why = { noMagnet: 0, seeds: 0, titolo: 0, cam: 0, episodio: 0, anno: 0, virus: 0, categoria: 0, sospetto: 0, dimensione: 0 };
+    const out = [];
+    const titleOk = n => ctx.titles.some(t => {
+        if (n.includes(' ' + t.n + ' ')) return true;
+        const w = t.n.split(' ');
+        return w.length >= 2 && w.every(x => n.includes(' ' + x + ' '));
+    });
+    hits.forEach(raw => {
+        const h = kbNormHit(raw);
+        if (!h) return;
+        const n = ' ' + kbNorm(h.title) + ' ';
+        if (!titleOk(n)) { no('titolo', h); return; }
+        if (KB_BAD_RE.test(n)) { no('cam', h); return; }
+        if (h.category && (/^\s*(audio|pc|xxx|console|mobile|books)\b/i.test(h.category) || /literature|hentai/i.test(h.category))) { no('categoria', h); return; }
+        const rest = ctx.titles.reduce((a, t) => a.split(' ' + t.n + ' ').join(' '), n);
+        if (KB_DANGER_TITLE_RE.test(h.title) || KB_SUSP_RE.test(rest)) { no('sospetto', h); return; }
+        if (h.bytes && h.bytes < 50 * 1048576) { no('dimensione', h); return; }
+        if (rxEp) { if (!rxEp.test(n)) { no('episodio', h); return; } }
+        else if (rxS1) { if (!rxS1.test(n) || /\bs\d+ ?e\d+\b/.test(n)) { no('episodio', h); return; } }
+        else if (rxY && !rxY.test(n)) { no('anno', h); return; }
+        if (h.virus >= 0.8) { no('virus', h); return; }
+        if (!h.magnet) { no('noMagnet', h); return; }
+        if (h.seeders < min || h.seeders <= curSeed) { no('seeds', h); return; }
+        h.resMatch = !!(ctx.res && kbRes(h.title) === ctx.res);
+        out.push(h);
+    });
+    if (tr) {
+        tr.push('scartati → ' + Object.keys(why).filter(k => why[k]).map(k => k + ': ' + why[k]).join(', ') + ' · validi: ' + out.length);
+        Object.keys(ex).filter(k => k !== 'titolo' && k !== 'anno').forEach(k => tr.push('  es. ' + k + ': ' + ex[k].join(' | ')));
+        const near = hits.map(kbNormHit).filter(Boolean).filter(h => titleOk(' ' + kbNorm(h.title) + ' ')).slice(0, 4);
+        if (near.length && !out.length) tr.push('titoli simili trovati: ' + near.map(h => `${h.title} [${h.seeders} seed${h.magnet ? '' : ', senza magnet'}]`).join(' | '));
+    }
+    const seen = new Set();
+    return out.filter(h => { const k = magnetKey(h.magnet); if (seen.has(k)) return false; seen.add(k); return true; })
+        .sort((a, b) => (b.seeders * (b.resMatch ? 4 : 1)) - (a.seeders * (a.resMatch ? 4 : 1)));
+}
+
+async function kbSearch(ctx, curSeed, tr) {
+    const tail = ctx.series ? ('S' + String(ctx.season).padStart(2, '0') + (ctx.ep != null ? 'E' + String(ctx.ep).padStart(2, '0') : '')) : ctx.year;
+    const tiers = [
+        [...new Set(ctx.titles.map(t => (t.n + ' ' + tail).trim()))],
+        [...new Set(ctx.titles.map(t => t.n))]
+    ];
+    for (const qs of tiers) {
+        const lists = await Promise.all(qs.map(q => kbFetch(q, !ctx.series, tr).catch(e => { console.warn('[MirSeer] Knaben:', e); return []; })));
+        for (const hits of lists) {
+            const c = kbPick(hits, ctx, curSeed, tr);
+            if (c.length) return c;
+        }
+    }
+    return [];
+}
+
+function kbReport(lines) {
+    const old = document.getElementById('seer-diag'); if (old) old.remove();
+    const ov = document.createElement('div');
+    ov.id = 'seer-diag';
+    ov.innerHTML = '<div class="sd-box"><div class="sd-head"><b>🔎 Knaben: nessuna alternativa</b><button type="button" class="sd-x">×</button></div><pre class="sd-out"></pre><div class="sd-foot"><button type="button" class="sd-copy">📋 Copia report</button></div></div>';
+    const text = lines.join('\n');
+    ov.querySelector('.sd-out').textContent = text;
+    ov.querySelector('.sd-x').onclick = () => ov.remove();
+    ov.querySelector('.sd-copy').onclick = () => { copyToClipboard(text); toast('📋 Report copiato', 'ok'); };
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+}
+
+/* ---------- job: finestra di avanzamento + "Usa MirCrew" / "Annulla" ---------- */
+const KB_STOP = { stop: true };
+function kbJob(total) {
+    const job = { state: 'run', total, pre: '', ui: null, timer: null };
+    job.stop = new Promise(res => { job._res = res; });
+    job.end = st => { if (job.state === 'run') { job.state = st; job._res(KB_STOP); } };
+    job.wait = p => Promise.race([p, job.stop]);
+    job.live = () => job.state === 'run';
+    job.set = txt => { job.txt = txt; const el = job.ui && job.ui.querySelector('.kb-s'); if (el) el.textContent = (job.pre || '') + txt; };
+    job.show = () => {
+        if (job.ui || !job.live()) return;
+        const ov = document.createElement('div');
+        ov.id = 'seer-kbbusy';
+        ov.innerHTML = '<div class="kb-box kb-busy"><div class="kb-spin"></div><div class="kb-head">Cerco una release con più seed…</div><div class="kb-s"></div>' +
+            '<div class="kb-foot"><button data-a="skip">Usa MirCrew</button><button data-a="cancel">Annulla</button></div></div>';
+        ov.querySelector('.kb-s').textContent = (job.pre || '') + (job.txt || '');
+        ov.addEventListener('click', e => { const a = e.target.closest('[data-a]'); if (a) job.end(a.dataset.a); });
+        document.body.appendChild(ov);
+        job.ui = ov;
+    };
+    job.close = () => { clearTimeout(job.timer); if (job.ui) { job.ui.remove(); job.ui = null; } };
+    job.timer = setTimeout(job.show, 250);   /* se e' tutto in cache non compare nemmeno */
+    return job;
+}
+
+/* Controlla i file REALI della release con TorrServer (stesso server usato per Play): niente eseguibili/archivi, e quasi tutto il peso deve essere video. */
+const kbVerCache = new Map();
+async function kbVerifyOne(h) {
+    const base = fpBase();
+    let t = await fpTsPost(base, { action: 'add', link: h.magnet, title: h.title, poster: '', save_to_db: false }, 40000);
+    if (!t) return { ok: false, why: 'TorrServer non risponde', soft: true };
+    const hash = t.hash || '';
+    for (let i = 0; i < 30 && !(t.file_stats && t.file_stats.length) && hash; i++) {
+        await sleep(800);
+        const g = await fpTsPost(base, { action: 'get', hash }, 15000);
+        if (g) t = g;
+    }
+    if (hash) fpTsPost(base, { action: 'rem', hash }, 15000);
+    const files = (t.file_stats || []).map(f => ({ path: String(f.path || ''), size: Number(f.length) || 0 }));
+    if (!files.length) return { ok: false, why: 'metadati non ricevuti', soft: true };
+    const bad = files.find(f => KB_DANGER_EXT_RE.test(f.path));
+    if (bad) return { ok: false, why: 'contiene file non video: ' + bad.path.split('/').pop().slice(0, 50) };
+    const vids = files.filter(f => KB_VIDEO_RE.test(f.path) && f.size >= 20 * 1048576);
+    if (!vids.length) return { ok: false, why: 'nessun file video' };
+    const total = files.reduce((a, f) => a + f.size, 0), vs = vids.reduce((a, f) => a + f.size, 0);
+    if (total && vs / total < 0.5) return { ok: false, why: 'quasi tutto il peso non e video' };
+    return { ok: true, video: vids.length };
+}
+function kbVerifyCached(h) {
+    const k = magnetKey(h.magnet);
+    const c = kbVerCache.get(k);
+    if (c) return c;
+    const p = Promise.race([kbVerifyOne(h), sleep(28000).then(() => ({ ok: false, why: 'timeout metadati', soft: true }))])
+        .catch(() => ({ ok: false, why: 'errore', soft: true }))
+        .then(r => { if (r.soft) kbVerCache.delete(k); return r; });
+    kbVerCache.set(k, p);
+    capMap(kbVerCache, 200);
+    return p;
+}
+
+/* Ritorna le release valide in ordine di classifica. Auto: si ferma alla prima valida (la migliore). Ask: aspetta al massimo qualche secondo per le altre. */
+async function kbVerify(cands, tr, multi, job, wantMany) {
+    if (!/^https?:\/\//i.test(fpBase())) {
+        const ok = cands.filter(h => KB_SIGNAL_RE.test(' ' + kbNorm(h.title) + ' '));
+        tr.push(`TorrServer non configurato: impossibile controllare i file, uso solo i filtri sul titolo (scartati ${cands.length - ok.length} senza indicazioni video)`);
+        return ok;
+    }
+    const size = multi ? 4 : 6, maxB = multi ? 1 : 3, want = wantMany ? 3 : 1, ok = [];
+    let grace = 0;
+    for (let b = 0; b < maxB && ok.length < want && b * size < cands.length; b++) {
+        const batch = cands.slice(b * size, b * size + size);
+        let done = 0;
+        job.set(`controllo i file di ${batch.length} release…`);
+        const ps = batch.map(h => kbVerifyCached(h).then(r => { done++; job.set(`controllati ${done} di ${batch.length}…`); return r; }));
+        for (let j = 0; j < ps.length && ok.length < want; j++) {
+            let r = await job.wait(ok.length && grace ? Promise.race([ps[j], sleep(Math.max(0, grace - Date.now())).then(() => null)]) : ps[j]);
+            if (r === KB_STOP) return ok;
+            if (!r) return ok;
+            tr.push(`file di "${batch[j].title.slice(0, 55)}" → ${r.ok ? 'OK (' + r.video + ' video)' : 'scartata: ' + r.why}`);
+            if (r.ok) { batch[j].verified = true; ok.push(batch[j]); if (ok.length === 1) grace = Date.now() + 8000; }
+        }
+    }
+    return ok;
+}
+
+/* { low, seed }: low = true solo se i seed sono davvero sotto soglia (o i tracker non rispondono). Errore/timeout = non so -> low:false */
+async function kbSwarm(uri, job) {
+    const c = swCache.get(magnetKey(uri));
+    let rec = swFresh(c) ? c : null;
+    if (!rec) {
+        job.set('controllo i seed su MirCrew…');
+        rec = await job.wait(Promise.race([swGet(uri), sleep(9000).then(() => null)])).catch(() => null);
+        if (rec === KB_STOP) return { low: false, seed: 0 };
+    }
+    if (!rec || !rec.ok) return { low: false, seed: 0 };
+    return { low: !rec.tracker || rec.seed < kbMin(), seed: rec.tracker ? rec.seed : 0 };
+}
+
+/* Appena il modal mostra pochi seed, scalda in silenzio la ricerca su Knaben (solo ricerca, nessun file aggiunto). Solo per release singole. */
+const kbPre = new Set();
+function kbPrefetch(item, uri, nMags) {
+    try {
+        if (kbMode() === 'off' || nMags !== 1 || !kbIsVideo(item)) return;
+        const k = magnetKey(uri), rec = swCache.get(k);
+        if (!rec || !rec.ok || kbPre.has(k)) return;
+        if (rec.tracker && rec.seed >= kbMin()) return;
+        const ctx = kbCtx(item, uri);
+        if (!ctx) return;
+        kbPre.add(k);
+        kbSearch(ctx, rec.tracker ? rec.seed : 0, []).catch(() => { });
+    } catch (e) { }
+}
+
+seerCss(`
+#seer-kbpick { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; padding: 14px; font-family: system-ui, -apple-system, sans-serif; }
+#seer-kbpick .kb-box { background: #0f1626; color: #e2e8f0; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; width: min(640px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+#seer-kbpick .kb-head { padding: 16px 18px 10px; font-size: 16px; font-weight: 800; }
+#seer-kbpick .kb-sub { padding: 0 18px 10px; font-size: 13px; color: #94a3b8; }
+#seer-kbpick .kb-list { overflow: auto; padding: 0 12px 8px; display: flex; flex-direction: column; gap: 8px; }
+#seer-kbpick .kb-row { text-align: left; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: inherit; border-radius: 12px; padding: 10px 12px; font: inherit; cursor: pointer; }
+#seer-kbpick .kb-row:hover { background: rgba(99,102,241,.22); border-color: rgba(99,102,241,.55); }
+#seer-kbpick .kb-t { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; }
+#seer-kbpick .kb-m { font-size: 12px; color: #94a3b8; margin-top: 3px; }
+#seer-kbpick .kb-foot { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.1); }
+#seer-kbpick .kb-foot button { flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.08); color: #fff; font: 800 13.5px system-ui, sans-serif; cursor: pointer; }
+#seer-kbbusy { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 14px; font-family: system-ui, -apple-system, sans-serif; }
+#seer-kbbusy .kb-busy { align-items: center; text-align: center; padding: 22px 18px 0; width: min(380px, 100%); background: #0f1626; color: #e2e8f0; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; display: flex; flex-direction: column; gap: 10px; }
+#seer-kbbusy .kb-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.12); border-top-color: #818cf8; animation: seerFpSpin .8s linear infinite; }
+#seer-kbbusy .kb-head { padding: 0; }
+#seer-kbbusy .kb-s { font-size: 13px; color: #94a3b8; min-height: 18px; overflow-wrap: anywhere; }
+#seer-kbbusy .kb-head { font-size: 16px; font-weight: 800; }
+#seer-kbbusy .kb-foot { align-self: stretch; margin: 6px -18px 0; display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.1); }
+#seer-kbbusy .kb-foot button { flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.08); color: #fff; font: 800 13.5px system-ui, sans-serif; cursor: pointer; }
+#seer-kbpick .kb-m .kb-ok { color: #4ade80; }
+`);
+
+/* Ritorna: uri scelto | null (annullato) */
+function kbChoose(item, uri, seed, cands) {
+    return new Promise(resolve => {
+        const old = document.getElementById('seer-kbpick'); if (old) old.remove();
+        const ov = document.createElement('div');
+        ov.id = 'seer-kbpick';
+        ov.innerHTML = `<div class="kb-box"><div class="kb-head">🔁 Pochi seed su MirCrew (${seed})</div>` +
+            `<div class="kb-sub">Alternative trovate su Knaben Database per <b>${esc(item.origTitle || item.cleanTitle)}</b>. Tocca quella da usare.</div>` +
+            `<div class="kb-list">${cands.map((c, i) => `<button class="kb-row" data-i="${i}"><div class="kb-t">${esc(c.title)}</div><div class="kb-m">🌱 ${c.seeders} seed${c.verified ? ' · <span class="kb-ok">✅ file verificati</span>' : ''}${kbFmtSize(c.bytes) ? ' · ' + kbFmtSize(c.bytes) : ''}${c.tracker ? ' · ' + esc(c.tracker) : ''}</div></button>`).join('')}</div>` +
+            `<div class="kb-foot"><button data-a="orig">Usa MirCrew (${seed} seed)</button><button data-a="cancel">Annulla</button></div></div>`;
+        const done = v => { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); };
+        const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+        document.addEventListener('keydown', onKey, true);
+        ov.addEventListener('click', e => {
+            const r = e.target.closest('.kb-row'), a = e.target.closest('[data-a]');
+            if (r) done(cands[+r.dataset.i].magnet);
+            else if (a) done(a.dataset.a === 'orig' ? uri : null);
+            else if (e.target === ov) done(null);
+        });
+        document.body.appendChild(ov);
+    });
+}
+
+async function kbResolveOne(item, uri, total, job, idx) {
+    if (!/^magnet:/i.test(String(uri))) return uri;
+    job.pre = total > 1 ? `Release ${idx + 1} di ${total}: ` : '';
+    const sw = await kbSwarm(uri, job);
+    if (!job.live() || !sw.low) return uri;
+    const ctx = kbCtx(item, uri);
+    if (!ctx) { if (total === 1) toast('Knaben: non riesco a capire quale episodio/stagione cercare, uso il magnet di MirCrew', 'warn', 3800); return uri; }
+    job.set(`pochi seed su MirCrew (${sw.seed}), cerco su Knaben…`);
+    const tr = [];
+    tr.push(`MirCrew: ${sw.seed} seed · soglia ${kbMin()}`);
+    tr.push(`titoli: ${ctx.titles.map(t => t.raw).join(' / ')} · ${ctx.series ? 'serie S' + ctx.season + (ctx.ep != null ? 'E' + ctx.ep : ' (stagione)') : 'film ' + (ctx.years || [ctx.year]).join('/')} · risoluzione: ${ctx.res || '?'}`);
+    tr.push('origine episodio: ' + ctx.src);
+    let cands = await job.wait(kbSearch(ctx, sw.seed, tr));
+    if (cands === KB_STOP || !job.live()) return uri;
+    if (cands.length) {
+        job.set(`trovate ${cands.length} release, controllo i file…`);
+        cands = await kbVerify(cands, tr, total > 1, job, kbMode() === 'ask' && total === 1);
+        if (!job.live()) return uri;
+    }
+    console.log('[MirSeer] Knaben\n' + tr.join('\n'));
+    if (!cands.length) {
+        if (total === 1) {
+            job.close();
+            toast('Knaben: nessuna alternativa migliore, uso il magnet di MirCrew', 'warn', 3200);
+            if (getPref('kbDebug', true)) kbReport(tr);
+        }
+        return uri;
+    }
+    if (kbMode() === 'ask' && total === 1) { job.close(); return kbChoose(item, uri, sw.seed, cands.slice(0, 8)); }
+    if (total === 1) toast(`🔁 Uso Knaben: ${cands[0].title.slice(0, 70)} · ${cands[0].seeders} seed`, 'ok', 4200);
+    return cands[0].magnet;
+}
+
+/* Punto unico usato da copia/apri/invia/play. Ritorna la lista di URI (eventualmente sostituiti) oppure null se l'utente annulla. */
+async function kbResolve(item, uris) {
+    if (kbMode() === 'off' || !item || !uris || !uris.length || !kbIsVideo(item)) return uris;
+    const job = kbJob(uris.length);
+    const out = [];
+    let swapped = 0;
+    try {
+        for (let i = 0; i < uris.length; i++) {
+            let r = uris[i];
+            if (i < 40 && job.live()) {
+                try { r = await kbResolveOne(item, uris[i], uris.length, job, i); } catch (e) { console.warn('[MirSeer] Knaben fallback', e); r = uris[i]; }
+            }
+            if (job.state === 'cancel' || r === null) return null;
+            if (r !== uris[i]) swapped++;
+            out.push(r);
+        }
+    } finally { job.close(); }
+    if (uris.length > 1 && swapped) toast(`🔁 ${swapped} di ${uris.length} magnet sostituiti con release di Knaben`, 'ok', 4200);
+    return out;
+}
 /* MIRSEER-WEBTOR-PATCH: streaming via Webtor, nello stesso overlay del trailer.
    MIRSEER-WEBTOR-INLINE MIRSEER-WEBTOR-PX
    NOTA: il magnet viene inviato ai server di webtor.io (cloud proxy). */
@@ -5002,13 +5423,13 @@ function seerAskLaunch(title) {
 function seerShowDiagChip() {
     const old = document.getElementById('seer-diagchip');
     if (old) old.remove();
-    const el = document.createElement('button');
+    const el = document.createElement('div');
     el.id = 'seer-diagchip';
-    el.type = 'button';
-    el.textContent = '🔬 VLC dà errore? Diagnostica';
-    el.onclick = () => { el.remove(); seerOpenDiag(); };
+    el.innerHTML = '<span class="dc-t" role="button" tabindex="0">🔬 VLC dà errore? Diagnostica</span><button type="button" class="dc-x" aria-label="Chiudi">×</button>';
+    el.querySelector('.dc-t').onclick = () => { el.remove(); seerOpenDiag(); };
+    el.querySelector('.dc-x').onclick = e => { e.stopPropagation(); el.remove(); };
     document.body.appendChild(el);
-    setTimeout(() => { if (el.parentNode) el.remove(); }, 60000);
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 5000);
 }
 function seerDownloadM3u(text, name) {
     const blobUrl = URL.createObjectURL(new Blob([text], { type: 'audio/x-mpegurl' }));
@@ -5478,7 +5899,7 @@ function seerAskPlayer(why, cb) {
         h,
         p,
         mk(mainVlcLabel, 'vlc'),
-        mk('🌐 Guarda nel browser (Webtor)', 'browser'),
+        mk('🌐 Guarda nel browser (Gateway)', 'browser'),
         mk('⇄ ' + altVlcLabel, altVlcKey, true),
         cancel
     );
@@ -5660,23 +6081,83 @@ function fpParse(files, all) {
     return out;
 }
 
-/* MIRSEER-VLCONLY-PATCH: la riproduzione nel browser e' stata rimossa, si usa solo VLC (via TorrServer) */
+/* MIRSEER-GATEWAY-PATCH (1.5.0): player nel browser tramite MirSeer Stream Gateway (Docker accanto a TorrServer).
+   Il gateway copia il video senza ricodificarlo quando il browser lo supporta (4K/HEVC/HDR compresi), converte
+   l'audio in AAC e permette di scegliere traccia audio e sottotitoli. VLC resta disponibile come alternativa. */
+const GW_BASE_KEY = 'gatewayBase';
+const GW_TOKEN_KEY = 'gatewayToken';
+const gwBase = () => String(getPref(GW_BASE_KEY, '') || '').trim().replace(/\/+$/, '');
+const gwToken = () => String(getPref(GW_TOKEN_KEY, '') || '').trim();
+const gwNorm = v => { v = String(v || '').trim().replace(/\/+$/, ''); if (v && !/^https?:\/\//i.test(v)) v = 'http://' + v; return v; };
+
 function seerPlayChosen(choice, uri, item, opts) {
+    if (choice === 'browser') return openInGateway(uri, item, opts);
     triggerVlcHandoff(uri, item, choice === 'vlc-m3u', opts);
 }
 function seerPlayDirect(uri, item, opts) {
-    seerPlayChosen('vlc', uri, item, opts);
+    seerPlayChosen(getPref('playerMode', 'vlc') === 'browser' ? 'browser' : 'vlc', uri, item, opts);
 }
-/* chiunque chiamasse ancora il vecchio player nel browser finisce su VLC (l'ultima dichiarazione vince) */
+/* vecchio nome: ora apre il player del gateway (l'ultima dichiarazione vince) */
 function openInWebtor(uri, item, opts) {
-    triggerVlcHandoff(uri, item, false, opts);
+    return openInGateway(uri, item, opts);
+}
+function openInGateway(uri, item, opts) {
+    if (!uri || !/^magnet:/i.test(String(uri))) return;
+    let base = gwBase();
+    if (!/^https?:\/\//i.test(base)) {
+        const ans = window.prompt(
+            'Per guardare nel browser serve il MirSeer Stream Gateway (contenitore Docker accanto a TorrServer).\n\n' +
+            'Inserisci il suo indirizzo (verra\' salvato):', 'http://127.0.0.1:8765');
+        const n = gwNorm(ans);
+        if (!n) { toast('Player nel browser annullato: indirizzo del gateway mancante', '', 3200); return; }
+        setPref(GW_BASE_KEY, n);
+        base = gwBase();
+    }
+    const name = (opts && opts.fileName)
+        ? (String(opts.fileName).replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || vlcSafeName(item, uri))
+        : vlcSafeName(item, uri);
+    const q = new URLSearchParams({ magnet: String(uri), name });
+    if (opts && opts.index) q.set('index', String(opts.index));
+    const tok = gwToken();
+    if (tok) q.set('k', tok);
+    const url = base + '/player?' + q.toString();
+    if (item) { markSeen(item, true); trackDl(item, [uri], 'webtor'); }
+
+    /* pagina https + gateway http non locale = contenuto misto: il player va aperto in una scheda a parte */
+    const loopback = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(base);
+    const mixed = location.protocol === 'https:' && /^http:\/\//i.test(base) && !loopback;
+    if (mixed) {
+        const w = window.open(url, '_blank', 'noopener');
+        if (w) return;
+    }
+    const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const ov = $('seer-trailer-overlay'), fr = $('seer-trailer-frame'), yt = $('seer-trailer-yt');
+    $('seer-trailer-title').textContent = '🌐 ' + ((item && (item.cleanTitle || item.displayTitle)) || 'Player');
+    yt.href = url;
+    yt.textContent = 'Apri in una scheda ↗';
+    const vb = document.getElementById('seer-ts-vlc'); if (vb) vb.style.display = 'none';
+    ov.style.display = 'flex';
+    if (mixed) {
+        /* popup bloccato (la chiamata arriva dopo operazioni asincrone): serve un click dell'utente */
+        fr.removeAttribute('src');
+        fr.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;height:100vh;background:#000;color:#e2e8f0;' +
+            'font:15px/1.5 system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;box-sizing:border-box}' +
+            'a.b{background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;text-decoration:none;font-weight:700;padding:14px 26px;border-radius:12px}' +
+            'small{opacity:.65;max-width:560px}</style></head><body><div>Il player e\' pronto.</div>' +
+            '<a class="b" href="' + attr(url) + '" target="_blank" rel="noopener">▶ Apri il player</a>' +
+            '<small>Il gateway e\' in http e il forum in https: il browser blocca l\'incorporamento, per questo si apre in una scheda. ' +
+            'Con un indirizzo https per il gateway (es. <code>tailscale serve --bg 8765</code>) il player si apre qui dentro.</small></body></html>';
+        return;
+    }
+    fr.removeAttribute('srcdoc');
+    fr.src = url;
 }
 
 function seerOpenFilePicker(uri, item) {
     const prev = $('seer-filepick');
     if (prev) prev.remove();
     const why = browserIncompatReasons(item, uri);
-    let mode = 'vlc';
+    let mode = getPref('playerMode', 'vlc') === 'browser' ? 'browser' : 'vlc'; /* MIRSEER-GATEWAY-PATCH */
     let closed = false;
     let list = [];
     const title = (item && (item.cleanTitle || item.displayTitle)) || (typeof magnetDn === 'function' ? magnetDn(String(uri)) : '') || 'Torrent';
@@ -5687,7 +6168,7 @@ function seerOpenFilePicker(uri, item) {
         '<div class="fp-box">' +
         '<div class="fp-head"><div><div class="fp-kicker">Scegli cosa riprodurre</div><div class="fp-title">' + esc(title) + '</div></div>' +
         '<button class="fp-x" title="Chiudi">✕</button></div>' +
-        '<div class="fp-tools"><div class="fp-seg"><button data-m="vlc">▶ VLC</button></div>' +
+        '<div class="fp-tools"><div class="fp-seg"><button data-m="vlc">▶ VLC</button><button data-m="browser">🌐 Browser</button></div>' +
         '<input class="fp-search" type="text" placeholder="Cerca nei file…" style="display:none"></div>' +
         '<div class="fp-hint"></div>' +
         '<div class="fp-body"><div class="fp-state"><div class="fp-spin"></div><div>Leggo l\'elenco dei file nel torrent…</div><small>La prima volta può richiedere qualche secondo</small></div></div>' +
@@ -5709,12 +6190,13 @@ function seerOpenFilePicker(uri, item) {
 
     const syncMode = () => {
         ov.querySelectorAll('.fp-seg button').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
-        if (mode === 'browser' && why.length) {
-            hint.textContent = '⚠ ' + why.join(', ') + ': nel browser potrebbe non partire o scattare. VLC è consigliato.';
+        const gwWhy = why.filter(w => /4K|HDR|AV1|10-bit|HEVC/.test(w));
+        if (mode === 'browser' && gwWhy.length) {
+            hint.textContent = 'ℹ️ ' + gwWhy.join(', ') + ': il gateway copia il video se il tuo browser lo decodifica, altrimenti lo ricodifica (senza GPU in 4K può scattare). Se non parte, usa VLC.';
             hint.classList.add('show');
         } else hint.classList.remove('show');
     };
-    ov.querySelectorAll('.fp-seg button').forEach(b => { b.onclick = () => { mode = b.dataset.m; syncMode(); }; });
+    ov.querySelectorAll('.fp-seg button').forEach(b => { b.onclick = () => { mode = b.dataset.m; setPref('playerMode', mode); syncMode(); }; });
     syncMode();
 
     const optsFor = f => ({ index: f.index, fileName: f.title, path: '/' + f.path.replace(/^\/+/, '') });
@@ -5783,9 +6265,11 @@ function seerOpenFilePicker(uri, item) {
     })();
 }
 
-function playRelease(uri, item) {
+async function playRelease(uri, item) {
     if (!uri || !/^magnet:/i.test(String(uri))) return;
-    seerOpenFilePicker(uri, item);
+    const r = await kbResolve(item, [uri]); /* MIRSEER-KNABEN-PATCH */
+    if (!r) return;
+    seerOpenFilePicker(r[0], item);
 }
 
 /* MIRSEER-QBPICK-PATCH: invio a qBittorrent con scelta dei file (solo magnet singolo).
@@ -6995,8 +7479,8 @@ function paintSwarm(item) {
             if (el) el.innerHTML = swHtml(swCache.get(k));
         };
         fill();
-        if (swFresh(swCache.get(k))) return;
-        swGet(m.uri, guard).then(rec => { if (rec) fill(); });
+        if (swFresh(swCache.get(k))) { kbPrefetch(item, m.uri, mags.length); return; }
+        swGet(m.uri, guard).then(rec => { if (rec) { fill(); kbPrefetch(item, m.uri, mags.length); } });
     });
 }
 
@@ -11159,6 +11643,28 @@ function init() {
                     </section>
 
                     <section class="seer-set-group">
+                        <h3 class="seer-set-group-title">🔁 Alternativa da Knaben (pochi seed)</h3>
+                        <div class="seer-set-row">
+                            <div class="seer-set-text">
+                                <span class="seer-set-label">Se il magnet di MirCrew ha pochi seed</span>
+                                <span class="seer-set-sub">Cerca la stessa release su Knaben Database (Pirate Bay ecc.) e usa quella con più seed. Vale per Copia/Apri, Invia al client e Play. Solo video.</span>
+                            </div>
+                            <select class="seer-settings-select" id="seer-pref-kbmode">
+                                <option value="off">Disattivato</option>
+                                <option value="auto">Sostituisci automaticamente</option>
+                                <option value="ask">Mostrami le alternative e scelgo io</option>
+                            </select>
+                        </div>
+                        <div class="seer-set-row">
+                            <div class="seer-set-text">
+                                <span class="seer-set-label">Soglia minima di seed</span>
+                                <span class="seer-set-sub">Sotto questo numero (o se i tracker non rispondono) si cerca su Knaben. Anche l'alternativa deve superarlo.</span>
+                            </div>
+                            <input type="number" min="1" max="999" step="1" class="seer-settings-select" id="seer-pref-kbmin" style="width:90px;">
+                        </div>
+                    </section>
+
+                    <section class="seer-set-group">
                         <h3 class="seer-set-group-title">⬇️ Client torrent (WebUI)</h3>
                         <div class="seer-set-row">
                             <div class="seer-set-text">
@@ -11215,6 +11721,33 @@ function init() {
                         <div class="seer-settings-status" id="seer-ts-status"></div>
                         <div class="seer-settings-actions">
                             <button class="seer-action-btn" id="seer-ts-test">🔌 Salva e testa connessione</button>
+                        </div>
+                    </section>
+                    <!-- MIRSEER-GATEWAY-PATCH -->
+                    <section class="seer-set-group">
+                        <h3 class="seer-set-group-title">🌐 Player nel browser (Stream Gateway)</h3>
+                        <div class="seer-set-row">
+                            <div class="seer-set-text">
+                                <span class="seer-set-label">Player predefinito</span>
+                                <span class="seer-set-sub">Quello preselezionato quando premi Play.</span>
+                            </div>
+                            <select class="seer-settings-select" id="seer-gw-mode">
+                                <option value="vlc">▶ VLC</option>
+                                <option value="browser">🌐 Browser (Gateway)</option>
+                            </select>
+                        </div>
+                        <label class="seer-settings-label" for="seer-gw-url">Indirizzo del Gateway</label>
+                        <input type="text" class="seer-settings-input" id="seer-gw-url" placeholder="http://192.168.1.10:8765" autocomplete="off" spellcheck="false" />
+                        <label class="seer-settings-label" for="seer-gw-token">Token (se impostato sul gateway)</label>
+                        <input type="password" class="seer-settings-input" id="seer-gw-token" autocomplete="new-password" spellcheck="false" />
+                        <p class="seer-settings-help">
+                            Servizio Docker da affiancare a TorrServer: copia il video senza ricodificarlo quando il browser lo supporta,
+                            converte l'audio in AAC e permette di scegliere audio e sottotitoli.<br>
+                            Con un indirizzo <b>http</b> il player si apre in una nuova scheda; con <b>https</b> si apre dentro MirSeer.
+                        </p>
+                        <div class="seer-settings-status" id="seer-gw-status"></div>
+                        <div class="seer-settings-actions">
+                            <button class="seer-action-btn" id="seer-gw-test">🔌 Salva e testa gateway</button>
                         </div>
                     </section>
                     <section class="seer-set-group">
@@ -11346,6 +11879,8 @@ function init() {
         applyHomeSections(names);
     };
     const sMagnet = $('seer-pref-magnet');
+    const sKbMode = $('seer-pref-kbmode');
+    const sKbMin = $('seer-pref-kbmin');
     const sTc = $('seer-pref-tc');
     const sTcUrl = $('seer-tc-url');
     const sTcUser = $('seer-tc-user');
@@ -11405,6 +11940,8 @@ function init() {
         sStart.value = settings.startView;
         if (sStart.value !== settings.startView) sStart.value = 'home';
         sMagnet.value = settings.magnetAction;
+        sKbMode.value = kbMode();
+        sKbMin.value = String(kbMin());
         sTc.value = tcClient();
         sTcUrl.value = String(getPref('tcUrl', '') || '');
         sTcUser.value = tcUser();
@@ -11412,6 +11949,9 @@ function init() {
         sTsUrl.value = String(getPref('vlcStreamBase', '') || '');
         $('seer-ts-user').value = tsUser();
         $('seer-ts-pass').value = tsPass();
+        $('seer-gw-url').value = gwBase(); $('seer-gw-token').value = gwToken(); /* MIRSEER-GATEWAY-PATCH */
+        $('seer-gw-mode').value = getPref('playerMode', 'vlc') === 'browser' ? 'browser' : 'vlc';
+        $('seer-gw-status').textContent = ''; $('seer-gw-status').className = 'seer-settings-status';
         sTsStatus.textContent = ''; sTsStatus.className = 'seer-settings-status';
         $('seer-vlc-mode').value = (IS_COARSE ? 'm3u' : getPref('vlcMode', 'scheme'));
         if (IS_COARSE) { const vm = $('seer-vlc-mode'); const vr = vm.closest('.seer-set-row'); if (vr) vr.style.display = 'none'; } /* MIRSEER-PHONE-M3U */
@@ -11442,6 +11982,8 @@ function init() {
         settings.startView = sStart.value || 'home';
         setPref('startView', settings.startView);
     };
+    sKbMode.onchange = () => { setPref('kbMode', sKbMode.value); toast('Knaben: ' + (sKbMode.value === 'off' ? 'disattivato' : sKbMode.value === 'auto' ? 'sostituzione automatica' : 'scelta manuale'), 'ok'); };
+    sKbMin.onchange = () => { const n = Math.max(1, Math.min(999, parseInt(sKbMin.value, 10) || 5)); sKbMin.value = String(n); setPref('kbMin', n); };
     sMagnet.onchange = () => {
         settings.magnetAction = sMagnet.value === 'open' ? 'open' : 'copy';
         setPref('magnetAction', settings.magnetAction);
@@ -11489,6 +12031,39 @@ function init() {
     $('seer-ts-user').onchange = $('seer-ts-user').oninput = $('seer-ts-user').onblur = saveTsUser;
     $('seer-ts-pass').onchange = $('seer-ts-pass').oninput = $('seer-ts-pass').onblur = saveTsPass;
     sTsUrl.oninput = () => setPref('vlcStreamBase', normTs(sTsUrl.value));
+    /* MIRSEER-GATEWAY-PATCH: impostazioni del player nel browser */
+    {
+        const gUrl = $('seer-gw-url'), gTok = $('seer-gw-token'), gMode = $('seer-gw-mode'), gSt = $('seer-gw-status'), gTest = $('seer-gw-test');
+        const gStatus = (txt, cls = '') => { gSt.textContent = txt; gSt.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
+        gUrl.oninput = () => setPref(GW_BASE_KEY, gwNorm(gUrl.value));
+        gUrl.onchange = () => { gUrl.value = gwNorm(gUrl.value); setPref(GW_BASE_KEY, gUrl.value); };
+        gTok.oninput = gTok.onchange = gTok.onblur = () => setPref(GW_TOKEN_KEY, gTok.value.trim());
+        gMode.onchange = () => setPref('playerMode', gMode.value === 'browser' ? 'browser' : 'vlc');
+        gTest.onclick = () => {
+            const base = gwNorm(gUrl.value);
+            gUrl.value = base;
+            setPref(GW_BASE_KEY, base);
+            setPref(GW_TOKEN_KEY, gTok.value.trim());
+            if (!base) { gStatus('Indirizzo rimosso: il player nel browser lo chiedera\' al primo uso.', ''); return; }
+            if (typeof GM_xmlhttpRequest !== 'function') { gStatus('Salvato (test non disponibile in questo gestore di userscript).', 'ok'); return; }
+            gTest.disabled = true;
+            gStatus('Connessione in corso…');
+            const done = (txt, cls) => { gStatus(txt, cls); gTest.disabled = false; };
+            GM_xmlhttpRequest({
+                method: 'GET', url: base + '/health', timeout: 8000,
+                onload: r => {
+                    if (r.status < 200 || r.status >= 300) return done('❌ Risposta HTTP ' + r.status + ' (e\' davvero il gateway?)', 'err');
+                    let j = null; try { j = JSON.parse(r.responseText); } catch (e) {}
+                    if (!j || !j.ok) return done('❌ Risposta non valida: non sembra il MirSeer Stream Gateway', 'err');
+                    if (j.auth && !gTok.value.trim()) return done('⚠ Gateway raggiungibile ma richiede un token: inseriscilo qui sopra', 'err');
+                    done('✅ Gateway ' + (j.version || '') + ' raggiungibile' + (j.torrserver ? ' · TorrServer collegato' : ' · ⚠ TorrServer NON raggiungibile dal gateway') +
+                        (j.zscale ? '' : ' · tonemap HDR non disponibile'), j.torrserver ? 'ok' : 'err');
+                },
+                onerror: () => done('❌ Non raggiungibile: indirizzo errato, gateway spento o permesso @connect negato', 'err'),
+                ontimeout: () => done('❌ Timeout: il gateway non risponde', 'err')
+            });
+        };
+    }
     sTsTest.onclick = () => {
         const base = normTs(sTsUrl.value);
         sTsUrl.value = base;
@@ -11512,13 +12087,13 @@ function init() {
         });
     };
 
-    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'tcPass', 'vlcStreamBase', 'tsUser', 'tsPass', 'follows', 'tvTrack', 'accent', 'accent2', 'density', 'tmdb_api_key', 'relUrl', 'relBase', 'tcRecentPaths', 'dlLog', 'swipeHint', 'vlcMode', 'homeSections'];
+    const BACKUP_KEYS = ['favs', 'seen', 'tcPaths', 'theme', 'heroEnabled', 'heroSpeed', 'startView', 'magnetAction', 'viewMode', 'hideSeen', 'sortMode', 'tcClient', 'tcUrl', 'tcUser', 'tcPass', 'vlcStreamBase', 'tsUser', 'tsPass', 'gatewayBase', 'gatewayToken', 'playerMode', 'follows', 'tvTrack', 'accent', 'accent2', 'density', 'tmdb_api_key', 'relUrl', 'relBase', 'tcRecentPaths', 'dlLog', 'swipeHint', 'vlcMode', 'homeSections', 'kbMode', 'kbMin'];
     const setBackupStatus = (txt, cls = '') => { sBackupStatus.textContent = txt; sBackupStatus.className = 'seer-settings-status' + (cls ? ' ' + cls : ''); };
 
     $('seer-export-btn').onclick = () => {
         try {
             const data = {};
-            const SECRET_KEYS = ['tcUser', 'tcPass', 'tsUser', 'tsPass', 'tmdb_api_key'];
+            const SECRET_KEYS = ['tcUser', 'tcPass', 'tsUser', 'tsPass', 'gatewayToken', 'tmdb_api_key'];
             const withSecrets = window.confirm('Includere nel backup anche password, utenti e chiave TMDb (in chiaro)?\n\nOK = includi (non condividere il file)\nAnnulla = esporta senza credenziali');
             BACKUP_KEYS.forEach(k => { if (!withSecrets && SECRET_KEYS.includes(k)) return; const v = getPref(k, undefined); if (v !== undefined) data[k] = v; });
             const payload = { app: 'MirSeer', schema: 1, version: '1.4', exportedAt: new Date().toISOString(), data };
@@ -11596,6 +12171,9 @@ function init() {
         if (isStr(d.tcPass)) { setPref('tcPass', d.tcPass); n++; }
         if (isStr(d.tsUser)) { setPref('tsUser', d.tsUser); n++; }
         if (isStr(d.tsPass)) { setPref('tsPass', d.tsPass); n++; }
+        if (isStr(d.gatewayBase) && /^https?:\/\//i.test(d.gatewayBase.trim())) { setPref('gatewayBase', d.gatewayBase.trim().replace(/\/+$/, '')); n++; }
+        if (isStr(d.gatewayToken)) { setPref('gatewayToken', d.gatewayToken); n++; }
+        if (d.playerMode === 'vlc' || d.playerMode === 'browser') { setPref('playerMode', d.playerMode); n++; }
         if (isStr(d.relUrl)) { setPref('relUrl', d.relUrl.trim()); n++; }
         if (isObj(d.relBase)) { setPref('relBase', d.relBase); n++; }
         if (Array.isArray(d.tcRecentPaths)) { setPref('tcRecentPaths', d.tcRecentPaths.filter(x => typeof x === 'string' && x)); n++; }
@@ -11817,15 +12395,18 @@ function init() {
     };
 
     const copyBtn = $('seer-copy-btn');
-    copyBtn.onclick = () => {
+    copyBtn.onclick = async () => {
         const mags = currentModalItem ? (currentModalItem.magnets || []) : [];
         if (mags.length) {
+            const kbR = await kbResolve(currentModalItem, [mags[0].uri]); /* MIRSEER-KNABEN-PATCH */
+            if (!kbR) return;
+            const kbUri = kbR[0];
             if (settings.magnetAction === 'open') {
-                openMagnet(mags[0].uri); trackDl(currentModalItem, [mags[0].uri], 'open');
+                openMagnet(kbUri); trackDl(currentModalItem, [kbUri], 'open');
                 flash(copyBtn, `<span>✅</span> Magnet inviato al client!`, magnetBtnLabel(), 'copied');
                 toast('🧲 Magnet inviato al client torrent', 'ok');
             } else {
-                copyToClipboard(mags[0].uri); trackDl(currentModalItem, [mags[0].uri], 'copy');
+                copyToClipboard(kbUri); trackDl(currentModalItem, [kbUri], 'copy');
                 flash(copyBtn, `<span>✅</span> Copiato!`, magnetBtnLabel(), 'copied');
                 toast('📋 Magnet copiato negli appunti', 'ok');
             }
@@ -11881,12 +12462,15 @@ function init() {
         if (!b) return;
         const m = mags[parseInt(b.dataset.mi, 10)];
         if (!m) return;
+        const kbR = await kbResolve(currentModalItem, [m.uri]); /* MIRSEER-KNABEN-PATCH */
+        if (!kbR) return;
+        const kbUri = kbR[0];
         if (settings.magnetAction === 'open') {
-            openMagnet(m.uri); trackDl(currentModalItem, [m.uri], 'open');
+            openMagnet(kbUri); trackDl(currentModalItem, [kbUri], 'open');
             flash(b, '✅ Inviato', magnetItemLabel(), 'copied');
             toast('🧲 Magnet inviato al client torrent', 'ok');
         } else {
-            copyToClipboard(m.uri); trackDl(currentModalItem, [m.uri], 'copy');
+            copyToClipboard(kbUri); trackDl(currentModalItem, [kbUri], 'copy');
             flash(b, '✅ Copiato', magnetItemLabel(), 'copied');
             toast('📋 Magnet copiato negli appunti', 'ok');
         }
@@ -12434,6 +13018,9 @@ seerCss(`
     z-index: 2147483647; background: linear-gradient(135deg,#6366f1,#a855f7); color: #fff; border: none;
     padding: 13px 20px; border-radius: 999px; font: 800 14px/1.2 system-ui, sans-serif; box-shadow: 0 10px 30px rgba(99,102,241,.55); max-width: 92vw;
 }
+#seer-diagchip { display: flex; align-items: center; gap: 12px; }
+#seer-diagchip .dc-t { cursor: pointer; }
+#seer-diagchip .dc-x { width: 26px; height: 26px; flex-shrink: 0; padding: 0; border-radius: 50%; border: none; background: rgba(255,255,255,.25); color: #fff; font: 800 17px/1 system-ui, sans-serif; cursor: pointer; }
 #seer-launch, #seer-diag {
     position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center;
     padding: calc(14px + env(safe-area-inset-top, 0px)) 14px calc(14px + env(safe-area-inset-bottom, 0px));
